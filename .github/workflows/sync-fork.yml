@@ -1,0 +1,60 @@
+name: Sync Fork with Upstream
+
+on:
+  schedule:
+    # Every 6 hours
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    if: github.repository != 'can1357/oh-my-pi'
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/can1357/oh-my-pi.git
+          git fetch upstream main
+
+      - name: Check if behind upstream
+        id: check
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Already up to date — nothing to sync"
+            echo "needs_sync=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_sync=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream
+        if: steps.check.outputs.needs_sync == 'true'
+        id: merge
+        run: |
+          if git merge upstream/main --no-edit -m "chore: sync with upstream"; then
+            echo "success=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "success=false" >> "$GITHUB_OUTPUT"
+            git merge --abort
+          fi
+
+      - name: Push merged changes
+        if: steps.merge.outputs.success == 'true'
+        run: git push origin HEAD:main
+
+      - name: Report conflict
+        if: steps.merge.outputs.success == 'false'
+        run: |
+          echo "::warning::Merge conflict detected with upstream. Manual resolution required."
+          echo "Run 'git fetch upstream && git merge upstream/main' locally to resolve."

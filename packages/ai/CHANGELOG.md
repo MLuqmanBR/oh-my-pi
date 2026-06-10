@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `api-gateway` provider registry definition for the local OpenAI-compatible gateway.
 - Added optional `ImageContent.detail` (`"auto" | "low" | "high" | "original"`): an OpenAI resolution hint forwarded by the `openai-responses` serializers (default stays `auto`) and by `openai-completions` for the values Chat Completions supports. `"original"` preserves native resolution — required for snapcompact frames, whose pixel-font glyphs do not survive the default downscale. Providers without a detail knob ignore the field.
 
 ### Fixed

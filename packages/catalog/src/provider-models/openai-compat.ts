@@ -1942,6 +1942,41 @@ export function lmStudioModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// 12.5 API Gateway (local OpenAI-compatible proxy)
+// ---------------------------------------------------------------------------
+
+export function apiGatewayModelManagerOptions(
+	config?: SimpleProviderConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? Bun.env.API_GATEWAY_BASE_URL ?? "http://localhost:3001/v1";
+	return {
+		providerId: "api-gateway",
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "api-gateway",
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => ({
+						...defaults,
+						reasoning: true,
+						thinking: {
+							mode: "effort",
+							efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+						},
+						...(typeof entry.context_window === "number" && entry.context_window > 0
+							? { contextWindow: entry.context_window }
+							: {}),
+					}),
+					fetch: config?.fetch,
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 13. Synthetic
 // ---------------------------------------------------------------------------
 

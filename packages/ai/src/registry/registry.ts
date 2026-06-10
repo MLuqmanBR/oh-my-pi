@@ -3,6 +3,7 @@ import { aimlApiProvider } from "./aimlapi";
 import { alibabaCodingPlanProvider } from "./alibaba-coding-plan";
 import { amazonBedrockProvider } from "./amazon-bedrock";
 import { anthropicProvider } from "./anthropic";
+import { apiGatewayProvider } from "./api-gateway";
 import { cerebrasProvider } from "./cerebras";
 import { cloudflareAiGatewayProvider } from "./cloudflare-ai-gateway";
 import { cursorProvider } from "./cursor";
@@ -117,6 +118,7 @@ const ALL = [
 	parallelProvider,
 	ollamaProvider,
 	ollamaCloudProvider,
+	apiGatewayProvider,
 	lmStudioProvider,
 	vllmProvider,
 	openaiProvider,
