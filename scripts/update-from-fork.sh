@@ -24,6 +24,12 @@ NC='\033[0m'
 
 REPO_PATH="${OMP_REPO_PATH:-$HOME/oh-my-pi}"
 BUN="${BUN:-bun}"
+# Ensure Rust/Cargo are in PATH (needed for native addon build)
+if [[ -f "$HOME/.cargo/env" ]]; then
+    source "$HOME/.cargo/env" 2>/dev/null || true
+fi
+# Restore bun in PATH (cargo env may overwrite)
+export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"
 
 # ── helpers ────────────────────────────────────────────────────
 log()  { echo -e "${DIM}$*${NC}"; }
