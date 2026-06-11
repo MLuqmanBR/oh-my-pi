@@ -2,6 +2,61 @@
 
 ## [Unreleased]
 
+## [15.11.2] - 2026-06-11
+
+### Added
+
+- Added the Expert Elixir language server (`expert`, invoked as `expert --stdio`) to the built-in LSP server list, auto-detected for Mix projects (`mix.exs`/`mix.lock`). When both are installed, `elixir-ls` remains the primary navigation server (Expert is ordered after it).
+- Added `magicKeywords.enabled` and per-keyword `magicKeywords.ultrathink`, `magicKeywords.orchestrate`, and `magicKeywords.workflow` settings to disable hidden magic-keyword notices and ultrathink auto-thinking escalation ([#1796](https://github.com/can1357/oh-my-pi/issues/1796)).
+- Added external-editor support for Plan Review section annotations, preserving multiline feedback for Refine plan ([#2305](https://github.com/can1357/oh-my-pi/issues/2305)).
+- Added plain-RPC slash command discovery with command source metadata and startup/update notifications ([#2261](https://github.com/can1357/oh-my-pi/issues/2261)).
+
+### Changed
+
+- Bash tool calls in one assistant message now run in parallel instead of serializing the batch: non-pty `bash` is scheduled as a shared tool (`pty: true` stays exclusive), and overlapping calls on the same shell session key degrade to isolated one-shot shells so they cannot queue behind or abort each other
+
+### Fixed
+
+- Fixed CDP attach target selection for Chromium/Edge endpoints that expose page targets through discovery before `browser.pages()` is populated, and improved `ws://` `app.cdp_url` diagnostics ([#2246](https://github.com/can1357/oh-my-pi/issues/2246)).
+- Fixed local memory consolidation on Responses-style models that reject user-only requests by sending a dedicated stage-two system prompt.
+- Fixed extension, custom-tool, custom-command, and hook loaders injecting `pi` through bare `@oh-my-pi/pi-coding-agent` self-imports, which could pull a different cached package version into global installs during plugin load and trigger mixed-runtime stack overflows.
+- Marked unsmoothed assistant streaming renders as transient so streamed code blocks can avoid synchronous syntax highlighting until the message finalizes.
+- Routed LSP hover code rendering through the shared cached highlighter instead of calling the native highlighter directly on each render.
+- Kept smooth assistant streaming renders transient until `message_end` so catch-up frames do not synchronously re-highlight still-growing code blocks.
+- Fixed the `job` tool's poll header repeating the running count ("waiting on 19 of 19 19 running"): the title now reads "waiting on N jobs" (or "waiting on N of M jobs" when some settled) and the dim meta lists only settled categories (done/failed/cancelled)
+- Fixed `irc` `send await:true` to a busy peer stranding the sender until timeout when async execution is disabled: the recipient (e.g. Main blocked in a synchronous task spawn awaiting the sender's own batch) can never reach a step boundary to reply, so it now generates an ephemeral side-channel auto-reply from its context (the pre-mailbox `respondAsBackground` behavior), records it as an `irc:autoreply` aside in its own history, and delivers it back over the bus with `replyTo` threading
+- Fixed Windows-style backslash paths and globs being parsed as literal POSIX path segments by search/find tools ([#2245](https://github.com/can1357/oh-my-pi/issues/2245)).
+
+## [15.11.1] - 2026-06-11
+
+### Added
+
+- Added the `statusLine.transparent` appearance setting (default off): when enabled, the status line skips the theme's `statusLineBg` fill and powerline end caps so the bar inherits the terminal's default background — useful in Ghostty and other terminals whose theme background does not match the theme's hardcoded status-line color ([#2306](https://github.com/can1357/oh-my-pi/issues/2306))
+
+### Changed
+
+- Changed `display.smoothStreaming` to animate streamed tool-call arguments (including write/edit/bash previews) at the smooth streaming cadence so partial tool input now appears progressively instead of in large jumps
+- Changed streamed updates for custom wire tools to render incremental raw input as `{ input }` prefixes for preview
+- `async.enabled` now defaults to `true`, keeping background task execution and async bash available out of the box; disable it to force blocking subtasks ([#2301](https://github.com/can1357/oh-my-pi/issues/2301)).
+- Shortened the status line's background-job indicator to a dedicated gear icon plus count (e.g. `⚙ 1` instead of `👥 1 job running`) and moved it left of the session name in the right segment group
+
+### Fixed
+
+- Fixed the task tool's streaming call preview rendering the per-agent list above the shared context/assignment briefs: agent rows now render below them, matching the result layout, so the list no longer pushes the brief down as items stream in and then jumps below it once the first progress snapshot arrives
+- Fixed interrupted or ending tool calls to flush streamed argument previews to the full received payload instead of freezing on a partial reveal chunk
+- Fixed tool-argument reveal to avoid splitting UTF-16 surrogate pairs at frame boundaries
+- Fixed input lag in long sessions whenever a spinner was visible: loader ticks forced a full TUI re-compose (re-walking every transcript block) 12.5 times per second. Animations that only change their own rows (status loaders, welcome intro, voice mic glyph, `/btw` streaming panel) now use the new component-scoped render path (`TUI.requestComponentRender`), which reuses every other root subtree's rows; resize, overlays, inline images, forced repaints, root-list changes, or any concurrent full request still compose the full frame
+- Fixed transcript rendering so blocks with rows committed to scrollback while still streaming rerender on the first finalized frame, so the final committed output is visible instead of stale in-flight lines
+- Fixed committed transcript bypass logic to re-render finalized blocks when their version changes, so post-finalization updates like restored inline errors and late tool-result content now appear in scrollback
+- Cached stable edit/write preview highlighting inside each tool component so steady-state frame renders do not re-enter the native syntax highlighter.
+- Skipped rendering finalized transcript blocks whose rows are already committed to native scrollback, keeping long restored sessions from re-rendering historical tool blocks every frame.
+- Fixed MCP OAuth authorization and token requests to include the required `resource` indicator for the target MCP server.
+- Restored `async.enabled=false` as the task tool's blocking mode, so subagents no longer become background jobs when async execution is disabled ([#2301](https://github.com/can1357/oh-my-pi/issues/2301)).
+- Fixed the `/tree` selector and HTML session export dropping the inherited `│` gutter for chain rows under a last-sibling branch, so the conversation flow under a `└─` branch stays visually anchored to its parent message ([#2298](https://github.com/can1357/oh-my-pi/issues/2298)).
+- Fixed Anthropic web search requests to include `metadata.user_id`, matching the main Messages path: API-key requests forward the active session id verbatim, OAuth requests build the Claude-Code-shaped `{session_id, account_uuid?, device_id}` JSON envelope so gateways see consistent attribution ([#2295](https://github.com/can1357/oh-my-pi/issues/2295)).
+- Fixed Anthropic classifier refusals to switch through configured retry fallback chains without same-model retries, and to keep the fallback pinned for the conversation. ([#2290](https://github.com/can1357/oh-my-pi/issues/2290))
+- Fixed the edit-tool hashline prompt to stop steering agents toward `insert after block N:` on closing delimiter lines; opener-only block anchors now point visible closing-line insertions to plain `insert after M:`. ([#2292](https://github.com/can1357/oh-my-pi/issues/2292))
+
 ## [15.11.0] - 2026-06-10
 
 ### Breaking Changes
@@ -163,7 +218,7 @@
 - Fixed pasting into the ask tool's "Other (type your own)" text box (and hook input/editor dialogs) on terminals with OSC 5522 enhanced paste (kitty protocol): the enhanced-paste focus routing only targets components exposing a `pasteText` hook, and the dialog wrappers had none, so the payload was stuffed into the main prompt editor hidden behind the dialog. `HookEditorComponent` and `HookInputComponent` now forward `pasteText` to their inner editor/input (pasting also resets the input dialog's timeout countdown like any keystroke).
 - Fixed auto-retry giving up after one attempt ("Provider requested Xms wait, exceeds retry.maxDelayMs") on a usage-limit 429 when every sibling account was only momentarily blocked: the retry delay now waits for the earliest sibling unblock when that comes sooner than the provider's multi-hour retry-after, so the next attempt picks up the recovered account instead of failing fast.
 - Fixed Hindsight `per-project-tagged` mental-model seeding so each project gets its own conventions/decisions models and session context only injects active-project or untagged models ([#2218](https://github.com/can1357/oh-my-pi/issues/2218)).
-- Fixed Windows stdio MCP `.cmd` commands by wrapping batch shims with `cmd.exe /d /s /c` using the outer command quotes required by `cmd /s`, while preserving literal `%` and quoted JSON arguments for Codegraph MCP ([#2220](https://github.com/can1357/oh-my-pi/issues/2220)).
+- Fixed Windows stdio MCP `.cmd` commands by wrapping batch shims such as `npx.cmd` and `codegraph.cmd` with hidden `cmd.exe /d /s /c` launches using the outer command quotes required by `cmd /s`, while preserving literal `%` and quoted JSON arguments ([#2220](https://github.com/can1357/oh-my-pi/issues/2220), [#2287](https://github.com/can1357/oh-my-pi/issues/2287)).
 - Fixed the bundled `explore` agent's `thinking-level: med` frontmatter — not a valid effort (`minimal`/`low`/`medium`/`high`/`xhigh`), so it silently parsed to undefined and the agent ran without its intended thinking level
 - Discovery context-file reads (`~/.claude`, `~/.cursor`, project trees, `@`-imports) now stat-gate to regular files before reading: a FIFO/socket/char device dropped where a context file is expected previously blocked startup forever on a read that can never see EOF.
 - Fixed the read tool's provider-visible `path` schema and docs so web URLs and internal URI targets (`omp://`, `issue://`, `pr://`, etc.) are advertised alongside local files ([#2215](https://github.com/can1357/oh-my-pi/issues/2215)).
