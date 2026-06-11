@@ -56,12 +56,40 @@ else
     STASHED=0
 fi
 
-# Pull latest from fork
-if ! git pull --ff-only origin main 2>&1; then
+# Fetch and update — handle both fast-forward and divergent branches
+# (the sync workflow creates merge commits which diverge from local linear history)
+log "Fetching latest from fork…"
+if ! git fetch origin main 2>&1; then
     if [[ "${STASHED:-0}" -eq 1 ]]; then
         git stash pop 2>/dev/null || true
     fi
-    die "git pull failed — fix conflicts manually and re-run"
+    die "git fetch failed — check your network connection"
+fi
+
+# Try fast-forward first (fast path for when local is behind with no divergence)
+if git merge-base --is-ancestor HEAD origin/main; then
+    log "Fast-forwarding to latest…"
+    if ! git merge --ff-only origin/main 2>&1; then
+        if [[ "${STASHED:-0}" -eq 1 ]]; then
+            git stash pop 2>/dev/null || true
+        fi
+        die "git merge --ff-only failed"
+    fi
+else
+    # Divergent branches (e.g. sync workflow merge commits on remote).
+    # Rebase local commits on top of origin/main.
+    warn "Branch diverged from remote — rebasing local commits on top"
+    if ! git rebase origin/main 2>&1; then
+        warn "Rebase had conflicts — aborting"
+        git rebase --abort 2>/dev/null || true
+        if [[ "${STASHED:-0}" -eq 1 ]]; then
+            git stash pop 2>/dev/null || true
+        fi
+        die "Could not rebase. Resolve manually:
+    cd $REPO_PATH
+    git rebase origin/main
+    # Fix conflicts, then: git rebase --continue"
+    fi
 fi
 
 # Restore stashed changes (your api-gateway provider is committed, so this is for WIP)
