@@ -22,7 +22,8 @@ DIM='\033[2m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-REPO_PATH="${OMP_REPO_PATH:-$HOME/oh-my-pi}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_PATH="${OMP_REPO_PATH:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 BUN="${BUN:-bun}"
 # Ensure Rust/Cargo are in PATH (needed for native addon build)
 if [[ -f "$HOME/.cargo/env" ]]; then
