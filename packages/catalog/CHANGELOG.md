@@ -5,6 +5,11 @@
 ### Added
 
 - Added `api-gateway` provider: a local OpenAI-compatible gateway with dynamic model discovery (`API_GATEWAY_API_KEY` env var, configurable base URL via `API_GATEWAY_BASE_URL`). All discovered models are treated as reasoning-capable with full `off`–`xhigh` thinking effort support.
+## [15.11.0] - 2026-06-10
+
+### Fixed
+
+- Fixed `buildModel` so malformed explicit thinking metadata without `efforts` is treated as sparse input and inferred instead of crashing during model resolution ([#2251](https://github.com/can1357/oh-my-pi/issues/2251)).
 
 ## [15.10.12] - 2026-06-10
 
