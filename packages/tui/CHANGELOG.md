@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added section support to `SettingsList`: `SettingItem.heading` rows split the list into sections, PgUp/PgDn (`tui.select.pageUp`/`pageDown`) jump between sections (or page when none exist), and wide renders use a split layout — section sidebar on the left, the active section's items on the right — falling back to inline heading rows when the width cannot fit both panes. Headings are skipped by navigation, excluded from search, and styled through the optional `SettingsListTheme.heading`/`section`.
+
+## [15.11.3] - 2026-06-11
+
 ### Fixed
 
 - Fixed the root compose letting a lower child's native-scrollback live seam overwrite a higher one: the topmost seam (and its commit-safe extension) now defines the commit boundary, so a status loader below a streaming transcript can no longer cause still-mutable transcript rows to be committed as stale history ([#2328](https://github.com/can1357/oh-my-pi/pull/2328)).
