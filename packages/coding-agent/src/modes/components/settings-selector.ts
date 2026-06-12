@@ -4,16 +4,18 @@ import {
 	type Component,
 	Container,
 	extractPrintableText,
-	fuzzyFilter,
+	fuzzyRank,
 	getKeybindings,
 	getSettingItemFilterText,
+	type ImageBudget,
 	Input,
 	matchesKey,
-	padding,
+	parseSgrMouse,
 	type SelectItem,
 	SelectList,
 	type SettingItem,
 	SettingsList,
+	type SgrMouseEvent,
 	Spacer,
 	type Tab,
 	TabBar,
@@ -21,6 +23,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
+import type { ShapeTarget } from "@oh-my-pi/snapcompact";
 import { getDefault, type SettingPath, settings } from "../../config/settings";
 import type {
 	SettingTab,
@@ -32,9 +35,10 @@ import { SETTING_TABS, TAB_METADATA } from "../../config/settings-schema";
 import { getCurrentThemeName, getSelectListTheme, getSettingsListTheme, theme } from "../../modes/theme/theme";
 import { AUTO_THINKING, type ConfiguredThinkingLevel } from "../../thinking";
 import { getTabBarTheme } from "../shared";
-import { DynamicBorder } from "./dynamic-border";
+import { bottomBorder, divider, row, topBorder } from "./overlay-box";
 import { handleInputOrEscape, PluginSettingsComponent } from "./plugin-settings";
 import { getSettingDef, getSettingsForTab, type SettingDef } from "./settings-defs";
+import { SnapcompactShapePreview } from "./snapcompact-shape-preview";
 import { getPreset } from "./status-line/presets";
 
 /**
@@ -66,8 +70,6 @@ class TextInputSubmenu extends Container {
 		this.#input = new Input();
 		if (currentValue) {
 			this.#input.setValue(currentValue);
-			// Move cursor to end of pre-filled value (ctrl+e = cursorLineEnd).
-			this.#input.handleInput("\x05");
 		}
 		this.#input.onSubmit = value => {
 			this.onSubmit(value); // empty string clears the setting
@@ -86,6 +88,8 @@ class SelectSubmenu extends Container {
 	#selectList: SelectList;
 	#previewText: Text | null = null;
 	#previewUpdateRequestId: number = 0;
+	#selectListLineOffset = 0;
+	#selectListLineCount = 0;
 
 	constructor(
 		title: string,
@@ -96,6 +100,7 @@ class SelectSubmenu extends Container {
 		onCancel: () => void,
 		onSelectionChange?: (value: string) => void | Promise<void>,
 		private readonly getPreview?: () => string,
+		footer?: Component,
 	) {
 		super();
 
@@ -157,6 +162,13 @@ class SelectSubmenu extends Container {
 		// Hint
 		this.addChild(new Spacer(1));
 		this.addChild(new Text(theme.fg("dim", "  Enter to select · Esc to go back"), 0, 0));
+
+		// Footer (e.g. the snapcompact shape preview) below the interactive rows,
+		// so the list never shifts while browsing.
+		if (footer) {
+			this.addChild(new Spacer(1));
+			this.addChild(footer);
+		}
 	}
 
 	#updatePreview(): void {
@@ -165,9 +177,63 @@ class SelectSubmenu extends Container {
 		}
 	}
 
+	/**
+	 * Concatenate children like Container.render, recording where the select
+	 * list lands so routed mouse events can be hit-tested against it.
+	 */
+	override render(width: number): readonly string[] {
+		const lines: string[] = [];
+		for (const child of this.children) {
+			const childLines = child.render(Math.max(1, width));
+			if (child === this.#selectList) {
+				this.#selectListLineOffset = lines.length;
+				this.#selectListLineCount = childLines.length;
+			}
+			lines.push(...childLines);
+		}
+		return lines;
+	}
+
+	/** Mouse routed from the host: wheel steps, hover lights, click confirms. */
+	routeMouse(event: SgrMouseEvent, line: number, _col: number): void {
+		if (event.wheel !== null) {
+			this.#selectList.handleWheel(event.wheel);
+			return;
+		}
+		const listLine = line - this.#selectListLineOffset;
+		const within = listLine >= 0 && listLine < this.#selectListLineCount;
+		const index = within ? this.#selectList.hitTest(listLine) : undefined;
+		if (event.motion) {
+			this.#selectList.setHoverIndex(index ?? null);
+			return;
+		}
+		if (event.leftClick && index !== undefined) {
+			this.#selectList.clickItem(index);
+		}
+	}
+
 	handleInput(data: string): void {
 		this.#selectList.handleInput(data);
 	}
+}
+
+let cachedSidebarWidth: number | undefined;
+/**
+ * Split-sidebar width derived from every group name in the schema (not just
+ * the visible tab), so the divider column never moves when switching tabs or
+ * when condition-gated groups appear.
+ */
+function settingsSidebarWidth(): number {
+	if (cachedSidebarWidth === undefined) {
+		let nameWidth = 0;
+		for (const tab of SETTING_TABS) {
+			for (const def of getSettingsForTab(tab)) {
+				if (def.group) nameWidth = Math.max(nameWidth, visibleWidth(def.group));
+			}
+		}
+		cachedSidebarWidth = Math.min(22, nameWidth) + 4;
+	}
+	return cachedSidebarWidth;
 }
 
 function getSettingsTabs(): Tab[] {
@@ -175,61 +241,10 @@ function getSettingsTabs(): Tab[] {
 		...SETTING_TABS.map(id => {
 			const meta = TAB_METADATA[id];
 			const icon = theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0]);
-			return { id, label: `${icon} ${meta.label}` };
+			return { id, label: `${icon} ${meta.label}`, short: icon };
 		}),
-		{ id: "plugins", label: `${theme.icon.package} Plugins` },
+		{ id: "plugins", label: `${theme.icon.package} Plugins`, short: theme.icon.package },
 	];
-}
-
-/**
- * Single-line search banner pinned above the settings content while a global
- * search is active. Renders nothing when idle so it can stay permanently
- * mounted between the top border and the tab content.
- */
-class SettingsSearchHeader implements Component {
-	#query = "";
-	#matchCount = 0;
-	#active = false;
-
-	update(query: string, matchCount: number): void {
-		this.#active = true;
-		this.#query = query;
-		this.#matchCount = matchCount;
-	}
-
-	clear(): void {
-		this.#active = false;
-		this.#query = "";
-		this.#matchCount = 0;
-	}
-
-	invalidate(): void {}
-
-	render(width: number): readonly string[] {
-		if (!this.#active) return [];
-
-		const icon = theme.symbol("icon.search");
-		const countText = this.#matchCount === 1 ? "1 match" : `${this.#matchCount} matches`;
-		const rightWidth = visibleWidth(countText) + 1; // trailing margin
-		// Fixed chrome: " <icon> " prefix plus the "▌" cursor cell.
-		const queryBudget = Math.max(4, width - visibleWidth(icon) - 4 - rightWidth - 1);
-
-		// Keep the tail visible (where the cursor is) when the query overflows.
-		let display = this.#query;
-		if (visibleWidth(display) > queryBudget) {
-			const chars = [...display];
-			while (chars.length > 1 && visibleWidth(chars.join("")) > queryBudget - 1) {
-				chars.shift();
-			}
-			display = `…${chars.join("")}`;
-		}
-
-		const left = ` ${theme.fg("accent", icon)} ${theme.bold(display)}${theme.fg("accent", "▌")}`;
-		const count = theme.fg(this.#matchCount > 0 ? "dim" : "warning", countText);
-		const gap = Math.max(1, width - visibleWidth(left) - rightWidth);
-		const line = truncateToWidth(`${left}${padding(gap)}${count} `, width);
-		return [line, ""];
-	}
 }
 
 /**
@@ -245,6 +260,12 @@ export interface SettingsRuntimeContext {
 	availableThemes: string[];
 	/** Working directory for plugins tab */
 	cwd: string;
+	/** Active model (api + id); resolves what the snapcompact `auto` shape maps to. */
+	model?: ShapeTarget;
+	/** Shared TUI image budget (graphics ids + transmit-once) for image previews. */
+	imageBudget?: ImageBudget;
+	/** Schedules a re-render after async preview work completes. */
+	requestRender?: () => void;
 }
 
 /** Status line settings subset for preview */
@@ -276,37 +297,34 @@ export interface SettingsCallbacks {
  * Main tabbed settings selector component.
  * Uses declarative settings definitions from settings-defs.ts.
  */
-export class SettingsSelectorComponent extends Container {
+export class SettingsSelectorComponent implements Component {
 	#tabBar: TabBar;
-	#searchHeader = new SettingsSearchHeader();
-	#footer: Component[];
 	#currentList: SettingsList | null = null;
 	#searchList: SettingsList | null = null;
 	#pluginComponent: PluginSettingsComponent | null = null;
-	#statusPreviewContainer: Container | null = null;
-	#statusPreviewText: Text | null = null;
 	#currentTabId: SettingTab | "plugins" = "appearance";
 	#preSearchTabId: SettingTab | "plugins" = "appearance";
 	#searchQuery = "";
+	/** Single-line editor backing the search banner (cursor, word ops, paste). */
+	#searchInput = new Input();
+	#searchMatchCount = 0;
 	/** First matching item id per tab id, for Tab-key jumps while searching. */
 	#searchFirstMatch = new Map<string, string>();
 	#textInputActive = false;
+	#hasSectionJump = false;
+	// Frame geometry from the last render, for mouse hit-testing (the
+	// fullscreen overlay paints from screen row 0, so mouse rows map 1:1).
+	#tabRowStart = 0;
+	#tabRowCount = 0;
+	#contentRowStart = 0;
+	#contentRowCount = 0;
 
 	constructor(
 		private readonly context: SettingsRuntimeContext,
 		private readonly callbacks: SettingsCallbacks,
 	) {
-		super();
-
-		// Top border, then the search banner (renders nothing while idle).
-		this.addChild(new DynamicBorder());
-		this.addChild(this.#searchHeader);
-
-		// Tab bar lives at the bottom, under the tab content, so value rows and
-		// descriptions stay put (closest to where the user is looking) while
-		// tabs act as a footer. No label prefix — the panel context is obvious —
-		// and no "(tab to cycle)" hint: it is folded into the list footer so it
-		// never wraps onto a lone line under the tabs.
+		// No label prefix (the frame title already says Settings) and no
+		// "(tab to cycle)" hint (folded into the footer hint line).
 		this.#tabBar = new TabBar("", getSettingsTabs(), getTabBarTheme());
 		this.#tabBar.showHint = false;
 		this.#tabBar.onTabChange = () => {
@@ -320,48 +338,23 @@ export class SettingsSelectorComponent extends Container {
 			this.#switchToTab(tabId);
 		};
 
-		// Footer: spacer + tab bar + bottom border. #setContent inserts the
-		// active content above this footer.
-		this.#footer = [new Spacer(1), this.#tabBar, new DynamicBorder()];
-		for (const child of this.#footer) {
-			this.addChild(child);
-		}
-
 		// Initialize with first tab
 		this.#switchToTab("appearance");
 	}
 
-	/**
-	 * Replace the tab content (everything between the search banner and the
-	 * footer). Removes whichever content component is active, runs `build` to
-	 * append the replacement, then re-attaches the footer below it.
-	 */
-	#setContent(build: () => void): void {
-		if (this.#currentList) {
-			this.removeChild(this.#currentList);
-			this.#currentList = null;
-		}
-		if (this.#searchList) {
-			this.removeChild(this.#searchList);
-			this.#searchList = null;
-		}
-		if (this.#pluginComponent) {
-			this.removeChild(this.#pluginComponent);
-			this.#pluginComponent = null;
-		}
-		if (this.#statusPreviewContainer) {
-			this.removeChild(this.#statusPreviewContainer);
-			this.#statusPreviewContainer = null;
-			this.#statusPreviewText = null;
-		}
+	invalidate(): void {
+		this.#tabBar.invalidate();
+		this.#currentList?.invalidate();
+		this.#searchList?.invalidate();
+		this.#pluginComponent?.invalidate();
+	}
 
-		for (const child of this.#footer) {
-			this.removeChild(child);
-		}
+	/** Swap the active content (per-tab list, search list, or plugins). */
+	#setContent(build: () => void): void {
+		this.#currentList = null;
+		this.#searchList = null;
+		this.#pluginComponent = null;
 		build();
-		for (const child of this.#footer) {
-			this.addChild(child);
-		}
 	}
 
 	#switchToTab(tabId: SettingTab | "plugins"): void {
@@ -375,6 +368,147 @@ export class SettingsSelectorComponent extends Container {
 		});
 	}
 
+	#footerHintText(): string {
+		if (this.#searchList) {
+			return "Enter to change · Tab to jump tabs · Esc to exit search";
+		}
+		if (this.#currentTabId === "plugins") {
+			return "Tab to switch tabs · Esc to close";
+		}
+		if (this.#currentList?.sectionFocused) {
+			return "↑/↓ to jump sections · Tab/Enter to settings · ←/→ to switch tabs · Esc to close";
+		}
+		const nav = this.#hasSectionJump ? "Tab to jump sections · ←/→ to switch tabs" : "Tab to switch tabs";
+		return `Enter/Space to change · ${nav} · Type to search · Esc to close`;
+	}
+
+	/** Single-line search banner: accent icon, editable query with live cursor, right-aligned match count. */
+	#renderSearchBanner(width: number): string {
+		const icon = theme.symbol("icon.search");
+		const countText = this.#searchMatchCount === 1 ? "1 match" : `${this.#searchMatchCount} matches`;
+		const rightWidth = visibleWidth(countText) + 1; // trailing margin
+		const prefix = ` ${theme.fg("accent", icon)} `;
+		// The input pads itself to exactly this width and keeps the cursor in view.
+		const inputWidth = Math.max(4, width - visibleWidth(prefix) - rightWidth - 1);
+		const inputLine = this.#searchInput.render(inputWidth)[0] ?? "";
+		const count = theme.fg(this.#searchMatchCount > 0 ? "dim" : "warning", countText);
+		return truncateToWidth(`${prefix}${theme.bold(inputLine)} ${count} `, width);
+	}
+
+	/**
+	 * Fullscreen frame: title border, tab row, divider, optional search banner,
+	 * the active content sized to fill the terminal, the appearance preview,
+	 * then a footer hint pinned above the bottom border.
+	 */
+	render(width: number): readonly string[] {
+		const height = Math.max(14, process.stdout.rows || 40);
+		const innerWidth = Math.max(1, width - 4);
+
+		const tabLines = this.#tabBar.render(innerWidth);
+		const searching = this.#searchList !== null;
+		const showPreview = !searching && this.#currentTabId === "appearance";
+		const previewLines = showPreview ? ["", theme.fg("muted", "Preview:"), this.#getStatusPreviewString()] : [];
+
+		// Fixed chrome: top border, tabs, divider, [search row], divider, hint, bottom border.
+		const fixedRows = 1 + tabLines.length + 1 + (searching ? 1 : 0) + 1 + 1 + 1;
+		const contentRows = Math.max(7, height - fixedRows - previewLines.length);
+
+		const list = this.#searchList ?? this.#currentList;
+		let contentLines: readonly string[];
+		if (list) {
+			// SettingsList pads itself to viewport + blank + 3 description rows.
+			list.setMaxVisible(contentRows - 4);
+			contentLines = list.render(innerWidth);
+		} else if (this.#pluginComponent) {
+			contentLines = this.#pluginComponent.render(innerWidth);
+		} else {
+			contentLines = [];
+		}
+
+		const out: string[] = [];
+		out.push(topBorder(width, "Settings"));
+		this.#tabRowStart = out.length;
+		this.#tabRowCount = tabLines.length;
+		for (const line of tabLines) {
+			out.push(row(line, width));
+		}
+		out.push(divider(width));
+		if (searching) {
+			out.push(row(this.#renderSearchBanner(innerWidth), width));
+		}
+		this.#contentRowStart = out.length;
+		this.#contentRowCount = contentRows;
+		for (let i = 0; i < contentRows; i++) {
+			out.push(row(contentLines[i] ?? "", width));
+		}
+		for (const line of previewLines) {
+			out.push(row(line, width));
+		}
+		out.push(divider(width));
+		out.push(row(theme.fg("dim", this.#footerHintText()), width));
+		out.push(bottomBorder(width));
+		return out;
+	}
+
+	/**
+	 * Route an SGR mouse report against the frame geometry of the last render.
+	 * Wheel scrolls the focused list, motion drives the hover highlights (tabs
+	 * and rows), and a left click activates: tabs switch (or jump, while
+	 * searching), a row click selects, and a click on the already-selected row
+	 * activates it (toggle / open submenu).
+	 */
+	#handleMouse(data: string): boolean {
+		const event = parseSgrMouse(data);
+		if (!event) return false;
+
+		const list = this.#searchList ?? this.#currentList;
+		// row() insets content by two columns (border + space).
+		const innerCol = event.col - 2;
+		const contentLine = event.row - this.#contentRowStart;
+
+		// An open submenu owns the pointer: wheel, hover, and clicks route into
+		// it (text-input submenus ignore routed events).
+		if (list?.hasOpenSubmenu()) {
+			list.routeSubmenuMouse(event, contentLine, innerCol);
+			return true;
+		}
+
+		if (event.wheel !== null) {
+			list?.handleWheel(event.wheel);
+			return true;
+		}
+
+		const tabLine = event.row - this.#tabRowStart;
+		const overTabs = tabLine >= 0 && tabLine < this.#tabRowCount;
+		const overContent = contentLine >= 0 && contentLine < this.#contentRowCount;
+
+		if (event.motion) {
+			const hovered = overTabs ? this.#tabBar.tabAt(tabLine, innerCol) : undefined;
+			this.#tabBar.setHoverTab(hovered && !hovered.muted ? hovered.id : null);
+			// hoverTest: never light up pane rows while the pointer is on the
+			// sidebar — only rows the pointer is actually on.
+			list?.setHoverItem(overContent ? (list.hoverTest(contentLine, innerCol) ?? null) : null);
+			return true;
+		}
+		if (!event.leftClick) return true;
+
+		if (overTabs) {
+			const tab = this.#tabBar.tabAt(tabLine, innerCol);
+			if (tab) this.#tabBar.selectTab(tab.id);
+			return true;
+		}
+		if (overContent && list) {
+			const id = list.hitTest(contentLine, innerCol);
+			if (id !== undefined) {
+				const wasSelected = list.getSelectedItem()?.id === id;
+				list.selectItem(id);
+				// Click-again activates: toggle booleans, open submenus.
+				if (wasSelected) list.handleInput("\n");
+			}
+		}
+		return true;
+	}
+
 	// ═══════════════════════════════════════════════════════════════════════
 	// Global search (type-to-search across every tab)
 	// ═══════════════════════════════════════════════════════════════════════
@@ -382,6 +516,9 @@ export class SettingsSelectorComponent extends Container {
 	/** Swap the tab content for the global search result list. */
 	#startSearch(initialQuery: string): void {
 		this.#preSearchTabId = this.#currentTabId;
+		this.#searchInput = new Input();
+		this.#searchInput.prompt = "";
+		this.#searchInput.setValue(initialQuery);
 		const list = new SettingsList(
 			[],
 			10,
@@ -391,15 +528,14 @@ export class SettingsSelectorComponent extends Container {
 			{
 				layout: "flat",
 				typeToSearch: false,
-				emptyText: "No matching settings — Backspace to edit, Esc to exit",
-				hint: "Enter/Space to change · Tab to jump tabs · Esc to exit search",
+				emptyText: "No matching settings",
+				hint: "",
 			},
 		);
 		// Keep the footer tab highlight on the tab owning the selected result.
 		list.onSelectionChange = item => this.#syncTabBarToSelection(item);
 		this.#setContent(() => {
 			this.#searchList = list;
-			this.addChild(list);
 		});
 		this.#setSearchQuery(initialQuery);
 	}
@@ -419,6 +555,7 @@ export class SettingsSelectorComponent extends Container {
 
 		const counts = new Map<SettingTab, number>();
 		const items: SettingItem[] = [];
+		const tabResults: { tab: SettingTab; matched: SettingItem[]; bestScore: number; order: number }[] = [];
 		this.#searchFirstMatch.clear();
 		let total = 0;
 		for (const tab of SETTING_TABS) {
@@ -427,24 +564,40 @@ export class SettingsSelectorComponent extends Container {
 				const item = this.#defToItem(def);
 				if (item) candidates.push(item);
 			}
-			const matched = fuzzyFilter(candidates, query, getSettingItemFilterText);
+			const ranked = fuzzyRank(candidates, query, getSettingItemFilterText);
+			const matched = ranked.map(result => result.item);
 			counts.set(tab, matched.length);
 			if (matched.length === 0) continue;
 			total += matched.length;
-			const meta = TAB_METADATA[tab];
+			tabResults.push({
+				tab,
+				matched,
+				bestScore: ranked[0]?.score ?? 0,
+				order: SETTING_TABS.indexOf(tab),
+			});
+		}
+
+		tabResults.sort((a, b) => a.bestScore - b.bestScore || a.order - b.order);
+		for (const result of tabResults) {
+			const meta = TAB_METADATA[result.tab];
 			items.push({
-				id: `__tab:${tab}`,
+				id: `__tab:${result.tab}`,
 				label: `${theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0])} ${meta.label}`,
 				currentValue: "",
 				heading: true,
 			});
-			this.#searchFirstMatch.set(tab, matched[0].id);
-			items.push(...matched);
+			this.#searchFirstMatch.set(result.tab, result.matched[0]?.id ?? "");
+			items.push(...result.matched);
 		}
 
 		this.#searchList.setItems(items);
-		this.#searchHeader.update(query, total);
-		this.#tabBar.setTabs(this.#buildSearchTabs(counts));
+		this.#searchMatchCount = total;
+		this.#tabBar.setTabs(
+			this.#buildSearchTabs(
+				counts,
+				tabResults.map(result => result.tab),
+			),
+		);
 		this.#syncTabBarToSelection(this.#searchList.getSelectedItem());
 	}
 
@@ -461,7 +614,7 @@ export class SettingsSelectorComponent extends Container {
 
 		this.#searchQuery = "";
 		this.#searchFirstMatch.clear();
-		this.#searchHeader.clear();
+		this.#searchMatchCount = 0;
 		this.#tabBar.setTabs(getSettingsTabs(), targetTab);
 		this.#switchToTab(targetTab);
 		if (selectedDef) {
@@ -469,22 +622,27 @@ export class SettingsSelectorComponent extends Container {
 		}
 	}
 
-	/** Matching tabs first (counts attached), the rest muted at the end. */
-	#buildSearchTabs(counts: Map<SettingTab, number>): Tab[] {
+	/** Matching tabs first (counts attached), ordered by best result score; the rest stay muted at the end. */
+	#buildSearchTabs(counts: Map<SettingTab, number>, matchedTabOrder: readonly SettingTab[]): Tab[] {
 		const matched: Tab[] = [];
 		const empty: Tab[] = [];
-		for (const id of SETTING_TABS) {
+		const matchedIds = new Set<SettingTab>(matchedTabOrder);
+		for (const id of matchedTabOrder) {
 			const meta = TAB_METADATA[id];
 			const icon = theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0]);
 			const count = counts.get(id) ?? 0;
 			if (count > 0) {
-				matched.push({ id, label: `${icon} ${meta.label} (${count})` });
-			} else {
-				empty.push({ id, label: `${icon} ${meta.label}`, muted: true });
+				matched.push({ id, label: `${icon} ${meta.label} (${count})`, short: `${icon} ${count}` });
 			}
 		}
+		for (const id of SETTING_TABS) {
+			if (matchedIds.has(id)) continue;
+			const meta = TAB_METADATA[id];
+			const icon = theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0]);
+			empty.push({ id, label: `${icon} ${meta.label}`, short: icon, muted: true });
+		}
 		// Plugins hosts its own UI; it is not part of the schema-backed search.
-		empty.push({ id: "plugins", label: `${theme.icon.package} Plugins`, muted: true });
+		empty.push({ id: "plugins", label: `${theme.icon.package} Plugins`, short: theme.icon.package, muted: true });
 		return [...matched, ...empty];
 	}
 
@@ -617,6 +775,7 @@ export class SettingsSelectorComponent extends Container {
 		// Preview handlers
 		let onPreview: ((value: string) => void | Promise<void>) | undefined;
 		let onPreviewCancel: (() => void) | undefined;
+		let footer: Component | undefined;
 
 		const activeThemeBeforePreview = getCurrentThemeName() ?? currentValue;
 		if (def.path === "theme.dark" || def.path === "theme.light") {
@@ -637,7 +796,6 @@ export class SettingsSelectorComponent extends Container {
 					rightSegments: presetDef.rightSegments,
 					separator: presetDef.separator,
 				});
-				this.#updateStatusPreview();
 			};
 			onPreviewCancel = () => {
 				const currentPreset = settings.get("statusLine.preset");
@@ -648,18 +806,23 @@ export class SettingsSelectorComponent extends Container {
 					rightSegments: presetDef.rightSegments,
 					separator: presetDef.separator,
 				});
-				this.#updateStatusPreview();
 			};
 		} else if (def.path === "statusLine.separator") {
 			onPreview = value => {
 				this.callbacks.onStatusLinePreview?.({ separator: value as StatusLineSeparatorStyle });
-				this.#updateStatusPreview();
 			};
 			onPreviewCancel = () => {
 				const separator = settings.get("statusLine.separator");
 				this.callbacks.onStatusLinePreview?.({ separator });
-				this.#updateStatusPreview();
 			};
+		} else if (def.path === "snapcompact.shape") {
+			const shapePreview = new SnapcompactShapePreview(currentValue, {
+				model: this.context.model,
+				imageBudget: this.context.imageBudget,
+				requestRender: this.context.requestRender,
+			});
+			onPreview = value => shapePreview.setValue(value);
+			footer = shapePreview;
 		}
 
 		// Provide status line preview for theme selection
@@ -682,6 +845,7 @@ export class SettingsSelectorComponent extends Container {
 			},
 			onPreview,
 			getPreview,
+			footer,
 		);
 	}
 
@@ -738,23 +902,12 @@ export class SettingsSelectorComponent extends Container {
 	#showSettingsTab(tabId: SettingTab): void {
 		const defs = getSettingsForTab(tabId);
 
-		// Add status line preview for appearance tab
-		if (tabId === "appearance") {
-			this.#statusPreviewContainer = new Container();
-			this.#statusPreviewContainer.addChild(new Spacer(1));
-			this.#statusPreviewContainer.addChild(new Text(theme.fg("muted", "Preview:"), 0, 0));
-			this.#statusPreviewText = new Text(this.#getStatusPreviewString(), 0, 0);
-			this.#statusPreviewContainer.addChild(this.#statusPreviewText);
-			this.#statusPreviewContainer.addChild(new Spacer(1));
-			this.addChild(this.#statusPreviewContainer);
-		}
-
 		const items = this.#buildItemsForDefs(defs);
 		// Mirror SettingsList's section detection (leading ungrouped items form
-		// an implicit section) so the hint only advertises PgUp/PgDn when the
-		// jump actually changes sections.
+		// an implicit section) so the footer hint only advertises PgUp/PgDn
+		// when the jump actually changes sections.
 		const sectionCount = items.filter(item => item.heading).length + (items.length > 0 && !items[0].heading ? 1 : 0);
-		const jumpHint = sectionCount >= 2 ? "PgUp/PgDn to jump sections · " : "";
+		this.#hasSectionJump = sectionCount >= 2;
 
 		this.#currentList = new SettingsList(
 			items,
@@ -786,15 +939,10 @@ export class SettingsSelectorComponent extends Container {
 				this.#refreshCurrentTabItems(defs);
 			},
 			() => this.callbacks.onCancel(),
-			// The selector owns type-to-search (global, cross-tab); disable the
-			// list's internal filter so the two never compete.
-			{
-				typeToSearch: false,
-				hint: `Enter/Space to change · ${jumpHint}Tab to switch tabs · Type to search · Esc to cancel`,
-			},
+			// The selector owns type-to-search and the footer hint; pin the
+			// split sidebar width so the divider never jumps between tabs.
+			{ typeToSearch: false, hint: "", sidebarWidth: settingsSidebarWidth() },
 		);
-
-		this.addChild(this.#currentList);
 	}
 
 	/**
@@ -846,16 +994,6 @@ export class SettingsSelectorComponent extends Container {
 			transparent: settings.get("statusLine.transparent"),
 		};
 		this.callbacks.onStatusLinePreview?.(statusLineSettings);
-		this.#updateStatusPreview();
-	}
-
-	/**
-	 * Update the inline status preview text.
-	 */
-	#updateStatusPreview(): void {
-		if (this.#statusPreviewText && this.#currentTabId === "appearance") {
-			this.#statusPreviewText.setText(this.#getStatusPreviewString());
-		}
 	}
 
 	#showPluginsTab(): void {
@@ -863,15 +1001,15 @@ export class SettingsSelectorComponent extends Container {
 			onClose: () => this.callbacks.onCancel(),
 			onPluginChanged: () => this.callbacks.onPluginsChanged?.(),
 		});
-		this.addChild(this.#pluginComponent);
-	}
-
-	getFocusComponent(): SettingsList | PluginSettingsComponent {
-		// Return the current focusable component - one of these will always be set
-		return (this.#searchList || this.#currentList || this.#pluginComponent)!;
 	}
 
 	handleInput(data: string): void {
+		// SGR mouse reports (the fullscreen overlay enables tracking).
+		if (data.startsWith("\x1b[<")) {
+			this.#handleMouse(data);
+			return;
+		}
+
 		// Text-input submenus take every byte: arrow keys must reach the
 		// cursor and Tab must not switch tabs.
 		if (this.#textInputActive) {
@@ -892,12 +1030,17 @@ export class SettingsSelectorComponent extends Container {
 			return;
 		}
 
-		if (
-			matchesKey(data, "tab") ||
-			matchesKey(data, "shift+tab") ||
-			matchesKey(data, "left") ||
-			matchesKey(data, "right")
-		) {
+		// Tab toggles keyboard focus between section headings and setting rows
+		// (fast section hopping); tabs without sections keep Tab switching tabs.
+		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
+			if (this.#currentList?.hasSectionFocusTargets()) {
+				this.#currentList.toggleSectionFocus();
+				return;
+			}
+			this.#tabBar.handleInput(data);
+			return;
+		}
+		if (matchesKey(data, "left") || matchesKey(data, "right")) {
 			this.#tabBar.handleInput(data);
 			return;
 		}
@@ -926,25 +1069,27 @@ export class SettingsSelectorComponent extends Container {
 			this.#endSearch(true);
 			return;
 		}
-		if (kb.matches(data, "tui.editor.deleteCharBackward")) {
-			this.#setSearchQuery([...this.#searchQuery].slice(0, -1).join(""));
-			return;
-		}
-		if (
-			matchesKey(data, "tab") ||
-			matchesKey(data, "shift+tab") ||
-			matchesKey(data, "left") ||
-			matchesKey(data, "right")
-		) {
+		if (matchesKey(data, "tab") || matchesKey(data, "shift+tab")) {
 			// Jump between tabs that have matches (muted tabs are skipped).
 			this.#tabBar.handleInput(data);
 			return;
 		}
-		const printable = extractPrintableText(data);
-		if (printable !== undefined) {
-			this.#setSearchQuery(this.#searchQuery + printable);
+		// Selection, paging, and activation stay with the result list.
+		if (
+			kb.matches(data, "tui.select.up") ||
+			kb.matches(data, "tui.select.down") ||
+			kb.matches(data, "tui.select.pageUp") ||
+			kb.matches(data, "tui.select.pageDown") ||
+			kb.matches(data, "tui.select.confirm") ||
+			data === "\n"
+		) {
+			list.handleInput(data);
 			return;
 		}
-		list.handleInput(data);
+		// Everything else edits the query like a regular single-line editor:
+		// cursor movement, word ops, kill ring, undo, paste.
+		this.#searchInput.handleInput(data);
+		const value = this.#searchInput.getValue();
+		if (value !== this.#searchQuery) this.#setSearchQuery(value);
 	}
 }

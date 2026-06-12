@@ -142,7 +142,7 @@ export const CATALOG_PROVIDERS = [
 	},
 	{
 		id: "google-antigravity",
-		defaultModel: "gemini-3-pro-high",
+		defaultModel: "gemini-3.1-pro",
 		specialModelManager: true,
 	},
 	{

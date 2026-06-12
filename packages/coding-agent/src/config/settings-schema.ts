@@ -1,4 +1,5 @@
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-ai";
+import { SHAPE_VARIANT_NAMES } from "@oh-my-pi/snapcompact";
 import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMetadata } from "../thinking";
 import {
 	TINY_MODEL_DEVICE_DEFAULT,
@@ -104,7 +105,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"Startup & Updates",
 		"Power (macOS)",
 	],
-	context: ["General", "Compaction", "Rules (TTSR)"],
+	context: ["General", "Compaction", "Rules (TTSR)", "Experimental"],
 	memory: ["General", "Mnemopi", "Hindsight"],
 	files: ["Editing", "Reading", "Read Summaries", "LSP"],
 	shell: ["Bash", "Eval & Python"],
@@ -814,6 +815,36 @@ export const SETTINGS_SCHEMA = {
 			group: "Prompt",
 			label: "Include Model in Prompt",
 			description: "Surface the active model identifier in the system prompt so the agent knows which model it is",
+		},
+	},
+
+	personality: {
+		type: "enum",
+		values: ["default", "friendly", "pragmatic", "none"] as const,
+		default: "default",
+		ui: {
+			tab: "model",
+			group: "Prompt",
+			label: "Personality",
+			description: "Communication style rendered into the system prompt's personality block",
+			options: [
+				{
+					value: "default",
+					label: "Default",
+					description: "Terse, evidence-first engineer; dense, action-oriented replies",
+				},
+				{
+					value: "friendly",
+					label: "Friendly",
+					description: "Warm, encouraging collaborator focused on momentum and morale",
+				},
+				{
+					value: "pragmatic",
+					label: "Pragmatic",
+					description: "Direct, efficient engineer focused on clarity and rigor",
+				},
+				{ value: "none", label: "None", description: "Omit the personality block entirely" },
+			],
 		},
 	},
 
@@ -1540,6 +1571,136 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	// Experimental: snapcompact inline imaging (transient, per-request; never persisted)
+	"snapcompact.systemPrompt": {
+		type: "enum",
+		values: ["none", "agents-md", "all"] as const,
+		default: "none",
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "Snapcompact System Prompt",
+			description:
+				"Experimental: render selected system prompt text as dense PNG image(s) and attach to the first user message (vision models only). Saves tokens; loses prompt caching for imaged text.",
+			options: [
+				{ value: "none", label: "None", description: "Keep the system prompt as text." },
+				{
+					value: "agents-md",
+					label: "AGENTS.md",
+					description: "Only move loaded context-file instructions to images, when that saves tokens.",
+				},
+				{
+					value: "all",
+					label: "All",
+					description: "Move the full system prompt to images, when that saves tokens.",
+				},
+			],
+		},
+	},
+
+	"snapcompact.toolResults": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "Snapcompact Tool Results",
+			description:
+				"Experimental: render large historical tool results as dense PNG image(s) instead of text (vision models only). Saves tokens on accumulated read/search output.",
+		},
+	},
+
+	"snapcompact.shape": {
+		type: "enum",
+		values: ["auto", ...SHAPE_VARIANT_NAMES] as const,
+		default: "auto",
+		ui: {
+			tab: "context",
+			group: "Experimental",
+			label: "Snapcompact Shape",
+			description:
+				"Frame shape snapcompact prints text with (compaction archive and inline imaging). Auto picks a shape tuned for the current model.",
+			options: [
+				{
+					value: "auto",
+					label: "Auto",
+					description: "Picks a shape tuned for the current model, falling back to its provider family.",
+				},
+				{
+					value: "8x8r-bw",
+					label: "8x8 repeated, black",
+					description:
+						"unscii square cell, black ink, every line printed twice with the copy on a pale highlight band.",
+				},
+				{
+					value: "8x8r-sent",
+					label: "8x8 repeated, sentence hues",
+					description: "Repeated grid with ink cycling six hues at sentence boundaries.",
+				},
+				{
+					value: "8x8u-bw",
+					label: "8x8, black",
+					description: "Plain unscii square cell, single-printed lines, black ink.",
+				},
+				{
+					value: "8x8u-sent",
+					label: "8x8, sentence hues",
+					description: "Plain unscii square cell with sentence-hue ink.",
+				},
+				{
+					value: "6x6u-bw",
+					label: "6x6 dense, black",
+					description: "unscii squeezed to 6x6 — densest readable cell, fewest frames — in black ink.",
+				},
+				{
+					value: "6x6u-sent",
+					label: "6x6 dense, sentence hues",
+					description: "Densest cell with sentence-hue ink.",
+				},
+				{
+					value: "5x8-bw",
+					label: "5x8 legacy, black",
+					description: "Original X.org 5x8 glyphs on the 2576px frame, black ink.",
+				},
+				{
+					value: "5x8-sent",
+					label: "5x8 legacy, sentence hues",
+					description: "The original snapcompact shape (pre-shape-table sessions rendered this).",
+				},
+				{
+					value: "6x12-dim",
+					label: "6x12, dimmed stopwords",
+					description: "X.org 6x12 glyphs, black ink, function words dimmed gray.",
+				},
+				{
+					value: "8x13-bw",
+					label: "8x13, black",
+					description: "X.org 8x13 glyphs, black ink.",
+				},
+				{
+					value: "8on16-bw",
+					label: "8x13 on 16px pitch, black",
+					description: "8x13 glyphs on an 8x16 cell (extra leading), black ink.",
+				},
+				{
+					value: "doc-8on16-bw",
+					label: "Doc 8on16, black",
+					description: "Two word-wrapped newspaper columns of 8x13 glyphs on a 16px pitch, black ink.",
+				},
+				{
+					value: "doc-8on16-sent",
+					label: "Doc 8on16, sentence hues",
+					description: "Two-column doc layout with sentence-hue ink.",
+				},
+				{
+					value: "doc-8on16-sent-dim",
+					label: "Doc 8on16, sentence hues + dimmed stopwords",
+					description: "Two-column doc layout, sentence-hue ink, function words dimmed gray.",
+				},
+			],
+		},
+	},
+
 	// Branch summaries
 	"branchSummary.enabled": {
 		type: "boolean",
@@ -1690,6 +1851,28 @@ export const SETTINGS_SCHEMA = {
 			group: "Mnemopi",
 			label: "Mnemopi Auto Retain",
 			description: "Retain completed conversation turns into local Mnemopi memory",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.polyphonicRecall": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "memory",
+			group: "Mnemopi",
+			label: "Mnemopi Polyphonic Recall",
+			description: "Enable 4-voice recall (vector, graph, fact, temporal) fused with reciprocal rank fusion",
+			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.enhancedRecall": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "memory",
+			group: "Mnemopi",
+			label: "Mnemopi Enhanced Recall",
+			description: "Enable the tiered query result cache for repeated and similar recall queries",
 			condition: "mnemopiActive",
 		},
 	},
@@ -3540,6 +3723,39 @@ export const SETTINGS_SCHEMA = {
 			],
 		},
 	},
+	// Codex saved rate-limit resets (auto-redeem)
+	"codexResets.autoRedeem": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Codex Auto-Redeem Saved Resets",
+			description:
+				"When a turn is blocked by the Codex weekly limit on the active account and no other account is available, automatically spend one saved rate-limit reset (ChatGPT 'save rate limit resets'). Conservative: never fires for 5-hour-only or Spark limits, near a natural reset, or twice for the same block. Requires retries enabled.",
+		},
+	},
+	"codexResets.minBlockedMinutes": {
+		type: "number",
+		default: 60,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Codex Auto-Redeem Min Block",
+			description:
+				"Only auto-redeem when the natural weekly reset is at least this many minutes away (don't spend a ~30-day credit to save a short wait).",
+		},
+	},
+	"codexResets.keepCredits": {
+		type: "number",
+		default: 0,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Codex Auto-Redeem Reserve",
+			description: "Never auto-spend below this many saved resets (0 = the last credit may be spent automatically).",
+		},
+	},
 	"provider.appendOnlyContext": {
 		type: "enum",
 		values: ["auto", "on", "off"] as const,
@@ -3781,6 +3997,9 @@ export type StatusLineSeparatorStyle = SettingValue<"statusLine.separator">;
 /** Tree selector filter mode - derived from schema */
 export type TreeFilterMode = SettingValue<"treeFilterMode">;
 
+/** Personality preset - derived from schema */
+export type Personality = SettingValue<"personality">;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Typed Group Definitions
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3925,6 +4144,11 @@ export interface ShellMinimizerSettings {
 	sourceOutlineLevel: "default" | "aggressive";
 	legacyFilters: boolean | undefined;
 }
+export interface CodexResetsSettings {
+	autoRedeem: boolean;
+	minBlockedMinutes: number;
+	keepCredits: number;
+}
 
 /** Map group prefix -> typed settings interface */
 export interface GroupTypeMap {
@@ -3944,6 +4168,7 @@ export interface GroupTypeMap {
 	modelTags: ModelTagsSettings;
 	cycleOrder: string[];
 	shellMinimizer: ShellMinimizerSettings;
+	codexResets: CodexResetsSettings;
 }
 
 export type GroupPrefix = keyof GroupTypeMap;

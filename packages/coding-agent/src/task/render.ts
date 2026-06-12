@@ -11,7 +11,6 @@ import { formatNumber } from "@oh-my-pi/pi-utils";
 import { settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
-import { shimmerEnabled, shimmerText } from "../modes/theme/shimmer";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
 import {
 	formatBadge,
@@ -40,9 +39,8 @@ interface TaskRenderContext {
 	hasResult?: boolean;
 	/**
 	 * The block left the transcript live region (detached spawn the transcript
-	 * has moved past, or a sealed block): progress rows render static gray
-	 * instead of shimmering, so commit-eligible rows never enter native
-	 * scrollback mid-sweep.
+	 * has moved past, or a sealed block): progress rows render static gray, so
+	 * commit-eligible rows do not repaint after entering native scrollback.
 	 */
 	frozen?: boolean;
 }
@@ -167,7 +165,7 @@ function formatJsonScalar(value: unknown, _theme: Theme): string {
 	return "";
 }
 
-function formatTaskId(id: string): string {
+export function formatTaskId(id: string): string {
 	// Ids are name-based (e.g. "Anna", "Anna-2"); a "." separates nesting levels
 	// (e.g. "Anna.Bob"). Render the hierarchy with a ">" breadcrumb.
 	const segments = id.split(".");
@@ -629,7 +627,13 @@ function createMarkdownSectionRenderer(text: string, theme: Theme): AssignmentSe
  */
 export function renderCall(args: TaskParams, options: TaskRenderOptions, theme: Theme): Component {
 	const showIsolated = "isolated" in args && args.isolated === true;
-	const header = renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme);
+	// Dispatch glyph from the first frame: spawning is non-blocking, so a
+	// pending/hourglass icon would misread the call as something the turn
+	// waits on.
+	const header = renderStatusLine(
+		{ iconOverride: theme.styledSymbol("tool.task", "accent"), title: "Task", description: args.agent },
+		theme,
+	);
 	const assignmentSection = createAssignmentSectionRenderer(args, theme);
 	const contextSection = createContextSectionRenderer(args, theme);
 	return framedBlock(theme, width => {
@@ -694,29 +698,23 @@ function renderAgentProgress(
 	const indent = prefix ? `${prefix} ` : "";
 	let statusLine: string;
 	if (progress.status === "running" || progress.status === "pending") {
-		// Live (or queued) agents shimmer their description so the row reads as
-		// in-flight — the async spawn result keeps the agent on "pending" while
-		// the detached job runs. Once the block leaves the live region it
-		// freezes (`frozen`): its rows are commit-eligible scrollback history,
-		// so paint them static gray instead of leaving a mid-sweep shimmer band
-		// in the terminal's history.
-		const bullet =
-			progress.status === "running" ? theme.styledSymbol("status.done", "text") : theme.fg(iconColor, icon);
+		// Live (or queued) agents use the same dot finished rows keep: detached
+		// async spawns can stay "pending" while real work is running, so a
+		// pending/hourglass or spinner glyph reads wrong in the transcript. Keep
+		// the row static; the Task tool header already carries the dispatch icon.
+		const dot = theme.styledSymbol("status.done", frozen ? "dim" : "accent");
 		const nameColor = frozen ? "dim" : "accent";
 		const name = theme.fg(nameColor, description ? theme.bold(displayId) : displayId);
-		statusLine = `${indent}${bullet} ${name}`;
+		statusLine = `${indent}${dot} ${name}`;
 		if (description) {
-			const desc = frozen
-				? theme.fg("dim", description)
-				: shimmerEnabled()
-					? shimmerText(description, theme)
-					: theme.fg("accent", description);
-			statusLine += `${theme.fg(nameColor, ":")} ${desc}`;
+			statusLine += `${theme.fg(nameColor, ":")} ${theme.fg(nameColor, description)}`;
 		}
+	} else if (progress.status === "completed") {
+		// Finished rows keep the dot but settle from accent to the plain
+		// foreground: completion reads as a color change, not a new glyph.
+		statusLine = `${indent}${theme.styledSymbol("status.done", "text")} ${theme.fg("text", titlePart)}`;
 	} else {
-		const glyph =
-			progress.status === "completed" ? theme.styledSymbol("status.done", "accent") : theme.fg(iconColor, icon);
-		statusLine = `${indent}${glyph} ${theme.fg("accent", titlePart)}`;
+		statusLine = `${indent}${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)}`;
 	}
 
 	// Show retry-blocked badge so the parent immediately sees that a child
@@ -992,7 +990,7 @@ function renderAgentResult(
 		: needsWarning
 			? theme.status.warning
 			: success
-				? theme.styledSymbol("status.done", "accent")
+				? theme.styledSymbol("status.done", "text")
 				: theme.status.error;
 	const iconColor = needsWarning ? "warning" : success ? "success" : mergeFailed ? "warning" : "error";
 	const statusText = aborted
@@ -1009,11 +1007,10 @@ function renderAgentResult(
 	const description = result.description?.trim();
 	const displayId = formatTaskId(result.id);
 	const titlePart = description ? `${theme.bold(displayId)}: ${description}` : displayId;
-	let statusLine = `${prefix ? `${prefix} ` : ""}${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)} ${formatBadge(
-		statusText,
-		iconColor,
-		theme,
-	)}`;
+	let statusLine = `${prefix ? `${prefix} ` : ""}${theme.fg(iconColor, icon)} ${theme.fg(
+		success && !needsWarning ? "text" : "accent",
+		titlePart,
+	)} ${formatBadge(statusText, iconColor, theme)}`;
 	const showBadge = settings.get("task.showResolvedModelBadge");
 	statusLine = appendAgentStats(
 		statusLine,
@@ -1227,8 +1224,16 @@ export function renderResult(
 	const metaLabel = countLabel ? (agentLabel ? `${countLabel}: ${agentLabel}` : countLabel) : agentLabel;
 	const header = renderStatusLine(
 		{
-			icon: icon === "success" ? undefined : icon,
-			iconOverride: icon === "success" ? theme.styledSymbol("status.done", "accent") : undefined,
+			icon: icon === "success" || icon === "running" ? undefined : icon,
+			// While agents are in flight the header shows the dispatch glyph, not a
+			// spinner: async spawns return immediately, so "running" means
+			// "delegated to peers", not "this call is blocking the turn".
+			iconOverride:
+				icon === "running"
+					? theme.styledSymbol("tool.task", "accent")
+					: icon === "success"
+						? theme.styledSymbol("status.done", "accent")
+						: undefined,
 			title: "Task",
 			meta: metaLabel ? [metaLabel] : undefined,
 		},

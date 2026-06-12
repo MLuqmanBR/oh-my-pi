@@ -9,7 +9,7 @@ import {
 	highlightCode as nativeHighlightCode,
 	supportsLanguage as nativeSupportsLanguage,
 } from "@oh-my-pi/pi-natives";
-import type { EditorTheme, MarkdownTheme, SelectListTheme, SymbolTheme } from "@oh-my-pi/pi-tui";
+import type { EditorTheme, MarkdownTheme, SelectListTheme, SettingsListTheme, SymbolTheme } from "@oh-my-pi/pi-tui";
 import { adjustHsv, colorLuma, getCustomThemesDir, isEnoent, logger, relativeLuminance } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { LRUCache } from "lru-cache/raw";
@@ -715,7 +715,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	"tool.debug": "\uEAD8",
 	"tool.mcp": "\uEB2D",
 	"tool.job": "\uEBA2",
-	"tool.task": "\uEA7E",
+	"tool.task": "\uf4a0",
 	"tool.todo": "\uEAB3",
 	"tool.memory": "\uEACE",
 	"tool.ask": "\uEAC7",
@@ -2744,6 +2744,7 @@ export function getSelectListTheme(): SelectListTheme {
 		scrollInfo: (text: string) => theme.fg("muted", text),
 		noMatch: (text: string) => theme.fg("muted", text),
 		symbols: getSymbolTheme(),
+		hovered: (text: string) => theme.bg("selectedBg", text),
 	};
 }
 
@@ -2756,17 +2757,19 @@ export function getEditorTheme(): EditorTheme {
 	};
 }
 
-export function getSettingsListTheme(): import("@oh-my-pi/pi-tui").SettingsListTheme {
+export function getSettingsListTheme(): SettingsListTheme {
 	return {
 		label: (text: string, selected: boolean, changed: boolean) =>
 			changed ? theme.fg("statusLineGitDirty", text) : selected ? theme.fg("accent", text) : text,
 		value: (text: string, selected: boolean, changed: boolean) =>
-			selected ? theme.fg("accent", text) : changed ? theme.fg("statusLineGitDirty", text) : theme.fg("muted", text),
+			changed ? theme.fg("statusLineGitDirty", text) : selected ? theme.fg("accent", text) : theme.fg("muted", text),
 		description: (text: string) => theme.fg("dim", text),
 		cursor: theme.fg("accent", `${theme.nav.cursor} `),
 		hint: (text: string) => theme.fg("dim", text),
-		heading: (text: string) => theme.fg("muted", theme.bold(text)),
+		heading: (text: string, dimmed: boolean) =>
+			dimmed ? theme.fg("dim", theme.underline(text)) : theme.fg("muted", theme.bold(theme.underline(text))),
 		section: (text: string, active: boolean) =>
 			active ? theme.fg("accent", theme.bold(text)) : theme.fg("muted", text),
+		hovered: (text: string) => theme.bg("selectedBg", text),
 	};
 }
