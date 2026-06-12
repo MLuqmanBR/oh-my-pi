@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [15.12.1] - 2026-06-12
+
+### Changed
+
+- `serializeConversation` now skips tool call/result pairs whose result is flagged contextually useless (`useless: true`, non-error), so archived frames stop carrying zero-match searches and timed-out waits
+
+## [15.11.7] - 2026-06-12
+
 ### Added
 
 - Added `SHAPE_VARIANTS`, the catalog of research-eval frame variants the native renderer reproduces faithfully (`8x8r`/`8x8u`/`6x6u`/`5x8` × `sent`/`bw`), with `ShapeVariantName`, `SHAPE_VARIANT_NAMES`, and the `isShapeVariantName` guard

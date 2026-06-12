@@ -1,6 +1,94 @@
 # Changelog
 
 ## [Unreleased]
+
+## [15.12.3] - 2026-06-12
+
+### Fixed
+
+- Restored the intended double-Esc default to `/tree` and fixed the Esc-opened selector path to reset the terminal display instead of preserving stale scrollback when the selector opens.
+
+## [15.12.2] - 2026-06-12
+
+### Fixed
+
+- Collab links now dot-join the room secret (`<roomId>.<key>`, `host/r/<roomId>.<key>`) instead of using a second `#`: RFC 3986 forbids a raw `#` inside a URL fragment, so macOS Foundation (behind terminal click-to-open) percent-encoded the browser deep link's second `#` to `%23` and the web client rejected the session. `/join`, `omp join`, and the web client still accept legacy `#`-joined links and leniently decode `%23`-mangled ones
+- Fixed `brew install can1357/tap/omp` failing on macOS with `sandbox-exec … exited with 1`: the generated `Formula/omp.rb` (rendered by `scripts/ci-update-brew-formula.ts`) now stamps `using: :nounzip` on every per-platform `url` so Homebrew leaves the bare Mach-O/ELF asset in the staging CWD (the previous `Dir["omp-*"].first` returned `nil` because `UnpackStrategy::Uncompressed#extract_nestedly` nested the file outside it), and wraps `generate_completions_from_executable` in `with_env(HOME: buildpath)` so the popened binary's `~/.omp` lookup goes to the writable staging dir instead of the sandbox-denied real home ([#2398](https://github.com/can1357/oh-my-pi/issues/2398))
+
+## [15.12.1] - 2026-06-12
+
+### Added
+
+- Added the `compaction.dropUseless` setting (default on): tool results flagged contextually useless are elided by the per-turn cache-aware prune pass and the pre-compaction threshold prune, replaced with `[Uneventful result elided]`. Built-in tools flag their uneventful outcomes — zero-match/zero-result `search`/`find`/`ast_grep`/`recall` (warnings included; the follow-up call has already corrected course), empty LSP lookups, `job` polls where everything is still running (plus nothing-to-wait-for and unknown-id polls), `irc` wait timeouts and empty inbox drains, and zero-result `github` searches / run-watch give-ups
+
+### Fixed
+
+- Restored the default double-Esc behavior to open the editable message-history selector instead of `/tree` so pressing Esc twice can edit a previous message again ([#2396](https://github.com/can1357/oh-my-pi/issues/2396)).
+
+## [15.12.0] - 2026-06-12
+
+### Added
+
+- Added `/collab view` command to create a read-only spectator join link
+- Added read-only hints and status text for guest-only participation in collab sessions
+- Added `share.serverUrl` and `share.redactSecrets` settings: the share server/viewer base for `/share` links (default `https://my.omp.sh/s`) and a toggle (default on) that runs the secret obfuscator over the shared snapshot before upload
+- HTML session exports now embed subagent transcripts: sub-session files stored next to the session (`<session>/<AgentId>.jsonl`, recursively) ride along in the export payload, agent ids in task tool cards become drill-down links, and a breadcrumbed overlay renders each subagent's full transcript — including its own tool cards and deeper nested agents — with Esc/backdrop navigation
+- Added Agent Hub focus mode: Enter on a local agent now retargets the main view to that live subagent session with regular transcript rendering, steering, Esc-to-main return, ←← parent navigation, and a ghost status-line badge.
+
+### Changed
+
+- Blocked cycling model and thinking presets while a focused subagent session is active and now prompts users to return to the main session first
+- Changed `codexResets.autoRedeem` from a boolean to `unset`/`yes`/`no`: unset runs the eligibility check and asks before spending a saved Codex reset, yes redeems without prompting, and no skips the check entirely
+- Changed collab links so full links with a write token grant mutation rights while links without a token now join as read-only
+- `/share` no longer uploads a plaintext HTML export to a gist for gistpreview. It now snapshots the session JSON, gzips and seals it with a fresh AES-256-GCM key, and pushes the blob to a secret gist (when `gh` is authenticated) or to the share server (capped at 1 MB; oversized sessions are trimmed — images first, then long strings, then oldest entries). The share link is `https://my.omp.sh/s/<id>#<key>`: the viewer fetches the blob (hex ids from the gist API, others from the relay store) and decrypts it in-browser, so the key never leaves the client. Configured secrets are additionally redacted from the snapshot unless `share.redactSecrets` is off. Custom `~/.omp/agent/share.{ts,js,mjs}` handlers keep the legacy HTML-file contract; `/share` also works for in-memory (`--no-session`) sessions now
+- `/collab` now prints a join hint with both link forms: the compact `omp join` link for terminals and a click-to-join browser deep link (`https://<relay-host>/#<link>`, displayed scheme-less, OSC 8-linked) — the relay serves the collab web client at `/`, and the room id + key ride in the URL fragment, so they never appear in any HTTP request. `/join`, `omp join`, and the web connect screen accept either form
+- npm installs no longer download fastembed's ~270MB ONNX native dependency tree eagerly: `fastembed` and `onnxruntime-node` are external to the bundle and optional peers of `@oh-my-pi/pi-mnemopi`, fetched on demand only when Mnemopi local embeddings are first used
+- The `job` tool prompt now documents that omitting `poll` waits on all running jobs, so agents stop enumerating every job id to poll everything
+- Collapsed task tool blocks now cap the per-agent list at 4 rows: the live progress view keeps the running/pending tail visible behind a `… N more agents (…)` summary line with per-status counts, finalized batches keep failed/aborted rows visible while folding the slowest successes, and the streaming call preview caps at the same 4 (expand shows the full list)
+- The anchored Subagents HUD above the editor now lists only detached background spawns: sync task calls (the parent turn is blocked and the inline tool block already renders live progress) and eval `agent()` helpers (rendered by their eval cell's own progress tree) no longer appear in the list
+- Completed rows in the `job` tool output now show the standard done checkmark instead of the watch glyph that replaced the spinner
+- HTML session exports render tool calls through the same React tool renderers the collab web client uses: per-tool views for all built-in tools (bash, edit diffs, todo boards, eval cells, task batches, LSP, search, browser screenshots, …) are bundled as an `<omp-tool-view>` web component into the export instead of the previous string-built dummy renderers
+- Modernized the HTML export page chrome to match the tool-card design language: hairline borders, dense mono typography, compact role-tinted message cards, refined tree sidebar and filter controls, themed scrollbars, collapsed-by-default thinking blocks, and mobile sidebar drawer — derived from the active theme's variables so light and dark themes both render correctly
+- Agent Hub's embedded chat overlay is now reserved for collab guest viewing; local agents open in the main session renderer instead.
+
+### Fixed
+
+- Filtered silent abort markers from Agent Hub assistant output so failed turns now render as normal error text
+- Reset focus-session state when switching transcript rendering between the main session and a focused subagent so streaming/progress context no longer leaks across sessions
+- Fixed read-only collab sessions so prompting, interrupts, and other write actions are blocked with a read-only warning instead of being applied
+- Fixed Mnemopi local embeddings in bundled and compiled installs failing with `Cannot find module '../bin/napi-v3/.../onnxruntime_binding.node'`: the Bun bundle inlined fastembed's loader so its relative native require resolved against `dist/cli.js`. `fastembed`/`onnxruntime-node` are no longer bundled; on first use Mnemopi `bun install`s the pinned pair into `~/.omp/cache/fastembed-runtime/<version-key>` and loads the binding from there ([#2389](https://github.com/can1357/oh-my-pi/issues/2389))
+- Fixed the interactive Model scope startup banner so models without an explicit thinking level do not show `:undefined`, and entries that were scoped without a `:level` are no longer rendered with the global default thinking level (which `applyRootSessionOptions` pre-fills on the cycling array for Ctrl+P) ([#2385](https://github.com/can1357/oh-my-pi/issues/2385)).
+
+## [15.11.8] - 2026-06-12
+
+### Added
+
+- Updated collab link handling to accept compact `roomId#key` links and relay hosts without explicit scheme when joining or starting sessions
+- Added `/collab stop` and `/collab status` options to control and inspect active shared sessions
+- Added `/collab`, `/join`, and `/leave` for live session sharing: the host shares an end-to-end encrypted link (AES-256-GCM key only in the link fragment; the relay sees opaque bytes) and guests render the session natively in their own TUI — streaming text, tool cards, footer state, ctrl+o expansion, `/dump` — and can prompt or interrupt the host's agent. Guest prompts render with an author badge; session-mutating commands stay host-only. Defaults to the public `my.omp.sh` relay (`collab.relayUrl`)
+- Added `collab.relayUrl` and `collab.displayName` settings plus a `collab` status-line segment showing the participant count (host) or guest role. Guests mirror the host's real model/thinking state into their replica agent and the host's subagent ecosystem end-to-end: the live subagent HUD, the Agent Hub table with live progress, hub chat/kill/revive (routed to the host), and on-demand subagent transcript viewing
+- Added `omp join <link>` subcommand that launches the interactive TUI and immediately runs `/join <link>`
+
+### Changed
+
+- Moved collab live-session wire contracts into `@oh-my-pi/pi-wire` and stopped broadcasting unsupported session events or entries to collab guests.
+- The Ctrl+P role-cycle track and the plan-approval model slider now color segments by track position from the theme's own palette (accent/success/warning/error + markdown/syntax hues, deduplicated per theme since many themes alias them) instead of role-keyed colors with a gray fallback for custom roles
+- Interactive boot no longer blocks first paint on MCP server discovery. For UI sessions, `createAgentSession` returns immediately and connects to configured MCP servers in the background; their tools and slash commands stream in through the existing live-refresh channel once connected. An explicitly requested MCP tool whose server has not finished connecting resolves to a deterministic "still connecting" placeholder instead of an "unknown tool" error, and each server's instructions join the system prompt once its background connection completes — carried in on the same live-refresh that registers its tools — so server-provided instructions are preserved, not dropped. `tools.discoveryMode: "auto"` is re-resolved once the background connect reports the real MCP tool count, so a toolset large enough to cross the threshold flips discovery on (registering `search_tool_bm25`) instead of force-activating every tool, and a session disposed while servers are still connecting disconnects them instead of resurrecting their tools onto the dead session. Non-UI modes (`print`/`rpc`/`acp`) keep the blocking discovery path. Measured ~290 ms (≈24% of cold boot) off the first-paint critical path with MCP servers configured.
+- Assistant-message streaming is cheaper per token. During a stream the component now reuses its `Markdown` subtree across reveal ticks — only the growing block is re-rendered — instead of tearing down and re-lexing every block on each ~30 fps tick, and grapheme counting in the reveal controller is memoized. A completed thinking block that precedes a still-streaming answer is no longer re-highlighted every frame (~66% less render work on think-then-answer streams in benchmarks; single-block streams are unchanged).
+- Cold boot no longer builds the model catalog's canonical-equivalence index on the first-paint critical path. The `ModelRegistry` constructor built `buildCanonicalModelIndex` over the entire ~3,200-model catalog synchronously (~210 ms); it is now built lazily on first read (`getCanonicalModels`/`getCanonicalVariants`/`getCanonicalId`, reached by the model picker and by `enabledModels`/default-role pattern resolution), which a default interactive launch never touches before paint. Measured ~244 ms (≈16% of cold-boot wall) off first paint; the picker pays the one-time build on first open.
+- Repeat `read` summaries of an unchanged file no longer re-run the tree-sitter parse. The per-session summary is memoized on the content hash of the freshly-read bytes — the file is still read fresh on every call, so results stay correct without a staleness window — dropping a repeated same-file summary read from ~17 ms to ~2.5 ms.
+- Attributed the previously-unlabeled synchronous boot region in the `PI_TIMING` startup table with `modelRegistry:init`, `buildCanonicalModelIndex`, and `initTelemetryExport` spans.
+
+### Fixed
+
+- Fixed remote (SSH) image attachment silently inserting the local-machine path as plain text: when omp runs over SSH and the terminal forwards a bracketed-paste image path, the path is unreachable from the remote host. The path-as-text fallback is gone for unreachable paths and the status now points the user at the clipboard image-paste shortcut so the bytes actually cross the connection ([#2375](https://github.com/can1357/oh-my-pi/issues/2375)).
+
+### Security
+
+- Rejected non-local `ws://` relay URLs and invalid room keys when parsing collab links to prevent insecure or malformed session joins
+
+## [15.11.7] - 2026-06-12
+
 ### Added
 
 - Added mouse support to the setup wizard, including hover, wheel scrolling, and click-to-select for provider sign-in, web-search provider, glyph, and theme option lists
@@ -26,9 +114,9 @@
 - Fixed tool calls taller than the viewport reading as cut off while streaming (the head reappeared only once the result landed): the 15.11.6 stranded-preview fix marked every collapsed pending tool preview commit-unstable, which also blocked durable top-anchored streams — e.g. a task call's context/assignment markdown — from reaching native scrollback mid-run. Commit stability is now classified per renderer (`ToolRenderer.provisionalPendingPreview`): only the tail-window previews the result render re-anchors (edit/apply_patch streamed-diff tails, bash/ssh command caps, eval cells with interleaved outputs) stay provisional; every other pending preview commits its settled head mid-stream again
 - Fixed `omp bench` reporting "tokens 0, TPS 0.0" successes on repeated OpenRouter runs: pi-ai opts every OpenRouter request into response caching, so bench's byte-identical request replayed a cached generation with zeroed usage at edge speed. Bench now sends `X-OpenRouter-Cache: false` so every run measures a fresh generation
 - Fixed `omp bench` failing with HTTP 400 `{"detail":"Instructions are required"}` against `openai-codex` models: bench requests now carry a minimal default system prompt (same guard as eval's completion bridge)
+- Fixed pressing `Ctrl+T` (toggle thinking blocks) — or hitting any other rebuild path such as the theme/preset selector — during the pre-streaming window after a submission erasing the just-submitted user message until the first assistant token arrived: the user message is rendered optimistically before `session.prompt(...)` lands it in session entries, so `rebuildChatFromMessages()` had no record of it; it now replays an in-flight optimistic submission after rebuilding the transcript, gated on `optimisticUserMessageSignature` (cleared by `EventController` once the real `message_start` lands) so it cannot duplicate post-streaming ([#2372](https://github.com/can1357/oh-my-pi/issues/2372)).
 
 ## [15.11.6] - 2026-06-12
-
 
 ### Changed
 

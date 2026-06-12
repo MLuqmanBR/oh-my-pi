@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+## [15.12.1] - 2026-06-12
+
+### Added
+
+- Added the optional `ToolResultMessage.useless` flag: tools can declare a finished result contextually useless (zero matches, elapsed wait) so compaction passes may elide it once consumed. Never serialized to provider wire formats and never set together with `isError`.
+
+## [15.12.0] - 2026-06-12
+
+### Fixed
+
+- Fixed Anthropic requests bypassing lone-surrogate sanitization after payload hooks or Anthropic-origin tool-call replay: the model itself can emit unpaired surrogate escapes in its own tool-argument JSON (streamed out fine, then rejected with `400 The request body is not valid JSON` on every subsequent request, bricking the session). The final Anthropic payload is now deep-sanitized with `toWellFormed()` immediately before SDK serialization; the pass is identity-preserving, so well-formed arguments stay byte-identical and prompt-cache prefixes are unaffected.
+
+## [15.11.8] - 2026-06-12
+
+### Breaking Changes
+
+- Removed the Codex SSE stateful transport path, so SSE turns no longer send `previous_response_id` with delta input and now always send the full transcript
+
+### Changed
+
+- Scoped `x-codex-turn-state` handling to within-turn continuations so only tool-loop follow-ups include the turn-state header and new user turns start without it
+
+### Removed
+
+- Removed the `statefulResponses` option from `OpenAICodexResponsesOptions`, and SSE stateful mode is no longer controlled by the `PI_CODEX_STATEFUL`-style flag
+
+### Fixed
+
+- Fixed the platform OpenAI Responses and Codex websocket stale-chain classifiers missing the "Unsupported parameter: previous_response_id" rejection phrasing (FastAPI-style `detail` body with no `error.code`), so a chained turn now falls back to a full-transcript replay instead of surfacing the 400
+- Fixed the HTTP-400 raw-request dump for Codex SSE to record the body actually sent on the wire instead of the pre-transport request body, which made chained-request failures look like the rejected parameter was never sent
+
+## [15.11.7] - 2026-06-12
+
 ### Added
 
 - Added `requestModelId` and `thinking.suppress` options to `google-gemini-cli` so collapsed effort-tier variants serialize their per-effort upstream wire id, and thinking-off requests on models with `thinking.suppressWhenOff` send an explicit `thinkingConfig` (`includeThoughts: false` with `thinkingLevel: "MINIMAL"` or `thinkingBudget: 0`) — Cloud Code Assist re-applies the per-id baked server default when the config is omitted, silently thinking and billing the tokens

@@ -49,8 +49,9 @@ import {
 } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import { reset as resetCapabilities } from "../capability";
+import type { CollabGuestLink } from "../collab/guest";
+import type { CollabHost } from "../collab/host";
 import { KeybindingsManager } from "../config/keybindings";
-import { MODEL_ROLES, type ModelRole } from "../config/model-roles";
 import { isSettingsInitialized, onStatusLineSessionAccentChanged, Settings, settings } from "../config/settings";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
@@ -62,7 +63,7 @@ import type {
 	ExtensionWidgetOptions,
 } from "../extensibility/extensions";
 import type { CompactOptions } from "../extensibility/extensions/types";
-import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slash-commands";
+import { loadSlashCommands } from "../extensibility/slash-commands";
 import type { Goal, GoalModeState } from "../goals/state";
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
@@ -82,7 +83,7 @@ import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
 import type { ShakeMode } from "../session/shake-types";
-import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES } from "../slash-commands/builtin-registry";
+import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, BUILTIN_SLASH_COMMANDS } from "../slash-commands/builtin-registry";
 import { formatDuration } from "../slash-commands/helpers/format";
 import { STTController, type SttState } from "../stt";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
@@ -121,6 +122,7 @@ import { InputController } from "./controllers/input-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
 import { OmfgController } from "./controllers/omfg-controller";
 import { SelectorController } from "./controllers/selector-controller";
+import { SessionFocusController } from "./controllers/session-focus-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TanCommandController } from "./controllers/tan-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
@@ -284,10 +286,15 @@ class StatusContainer extends Container implements NativeScrollbackLiveRegion {
  * Build the anchored subagent HUD block: a bold accent "Subagents" header plus
  * one hooked row per running agent in the same `Id: description` shape the
  * inline task rows use (muted task preview when no description was given).
+ * Only detached background spawns are listed: a sync task call blocks the
+ * parent turn and its inline tool block already renders progress live, and
+ * eval `agent()` spawns are rendered by their own eval cell tree.
  * Returns an empty array when nothing is running so the container can clear.
  */
 export function renderSubagentHudLines(sessions: ObservableSession[], columns: number): string[] {
-	const running = sessions.filter(session => session.kind === "subagent" && session.status === "active");
+	const running = sessions.filter(
+		session => session.kind === "subagent" && session.status === "active" && session.detached === true,
+	);
 	if (running.length === 0) return [];
 
 	const indent = "  ";
@@ -397,6 +404,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	fileSlashCommands: Set<string> = new Set();
 	skillCommands: Map<string, string> = new Map();
 	oauthManualInput: OAuthManualInputManager = new OAuthManualInputManager();
+	collabHost?: CollabHost;
+	collabGuest?: CollabGuestLink;
 
 	#pendingSlashCommands: SlashCommand[] = [];
 	#cleanupUnsubscribe?: () => void;
@@ -423,9 +432,43 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #commandController: CommandController;
 	readonly #todoCommandController: TodoCommandController;
 	readonly #eventController: EventController;
+	get eventController(): EventController {
+		return this.#eventController;
+	}
+	get eventBus(): EventBus | undefined {
+		return this.#eventBus;
+	}
 	readonly #extensionUiController: ExtensionUiController;
 	readonly #inputController: InputController;
 	readonly #selectorController: SelectorController;
+	readonly #focusController: SessionFocusController;
+	get viewSession(): AgentSession {
+		return this.#focusController.target ?? this.session;
+	}
+	get focusedAgentId(): string | undefined {
+		return this.#focusController.focusedAgentId;
+	}
+	focusAgentSession(id: string): Promise<void> {
+		return this.#focusController.focusAgent(id);
+	}
+	focusParentSession(): Promise<void> {
+		return this.#focusController.focusParent();
+	}
+	unfocusSession(): Promise<void> {
+		return this.#focusController.unfocus();
+	}
+	clearTransientSessionUi(): void {
+		if (this.loadingAnimation) {
+			this.loadingAnimation.stop();
+			this.loadingAnimation = undefined;
+		}
+		this.statusContainer.clear();
+		this.pendingMessagesContainer.clear();
+		this.compactionQueuedMessages = [];
+		this.streamingComponent = undefined;
+		this.streamingMessage = undefined;
+		this.pendingTools.clear();
+	}
 	readonly #uiHelpers: UiHelpers;
 	#sttController: STTController | undefined;
 	#voiceAnimationInterval: NodeJS.Timeout | undefined;
@@ -551,6 +594,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#commandController = new CommandController(this);
 		this.#todoCommandController = new TodoCommandController(this);
 		this.#selectorController = new SelectorController(this);
+		this.#focusController = new SessionFocusController(this);
 		this.#inputController = new InputController(this);
 		this.#observerRegistry = new SessionObserverRegistry();
 	}
@@ -1146,6 +1190,12 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.editor.borderColor = theme.getThinkingBorderColor(level);
 			}
 		}
+		if (this.focusedAgentId) {
+			// Focused subagent view: faint the outline so the borrowed session is
+			// visually distinct from the main one.
+			const base = this.editor.borderColor;
+			this.editor.borderColor = (str: string) => `\x1b[2m${base(str)}\x1b[22m`;
+		}
 		this.updateEditorTopBorder();
 		this.ui.requestRender();
 	}
@@ -1160,8 +1210,32 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.chatContainer.clear();
 		// Full-history transcript: compactions render as inline dividers instead
 		// of restarting the visible conversation (the LLM context still resets).
-		const context = this.session.buildTranscriptSessionContext();
+		const context = this.viewSession.buildTranscriptSessionContext();
 		this.renderSessionContext(context);
+		// During the pre-streaming window — after `startPendingSubmission` has
+		// optimistically rendered the user's message but before the user
+		// `message_start` event lands it in `session` entries — any rebuild
+		// (e.g. Ctrl+T toggleThinkingBlockVisibility, theme selector) would
+		// otherwise erase the user's just-submitted message until the first
+		// assistant token arrived (#2372). Once `message_start` fires the
+		// signature is cleared by `EventController`, so this replay is a no-op
+		// post-streaming and cannot duplicate.
+		this.#replayOptimisticUserMessage();
+	}
+
+	#replayOptimisticUserMessage(): void {
+		if (!this.optimisticUserMessageSignature) return;
+		const submission = this.#pendingSubmittedInput;
+		if (!submission || submission.cancelled || submission.customType) return;
+		this.addMessageToChat(
+			{
+				role: "user",
+				content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
+				attribution: "user",
+				timestamp: Date.now(),
+			},
+			{ imageLinks: submission.imageLinks },
+		);
 	}
 
 	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean): string {
@@ -2467,7 +2541,6 @@ export class InteractiveMode implements InteractiveModeContext {
 						index: startTierIndex,
 						segments: cycle.models.map(entry => ({
 							label: entry.role,
-							color: MODEL_ROLES[entry.role as ModelRole]?.color,
 							detail: entry.model.name || entry.model.id,
 						})),
 						onChange: index => {
@@ -2663,6 +2736,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#btwController.dispose();
 		this.#omfgController.dispose();
+		this.#focusController.dispose();
 
 		// Emit shutdown event to hooks
 		await this.session.dispose();
