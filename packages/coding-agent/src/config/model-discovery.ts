@@ -417,6 +417,7 @@ export async function discoverOpenAIModelsList(
 				api: providerConfig.api,
 				provider: providerConfig.provider,
 				baseUrl,
+				reasoning: false,
 				...permissiveThinking,
 				input: ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
