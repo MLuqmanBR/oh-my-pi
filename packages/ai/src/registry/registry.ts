@@ -32,6 +32,7 @@ import { nanogptProvider } from "./nanogpt";
 import { nvidiaProvider } from "./nvidia";
 import { ollamaProvider } from "./ollama";
 import { ollamaCloudProvider } from "./ollama-cloud";
+import { omnirouteProvider } from "./omniroute";
 import { openaiProvider } from "./openai";
 import { openaiCodexProvider } from "./openai-codex";
 import { openaiCodexDeviceProvider } from "./openai-codex-device";
@@ -119,6 +120,7 @@ const ALL = [
 	ollamaProvider,
 	ollamaCloudProvider,
 	apiGatewayProvider,
+	omnirouteProvider,
 	lmStudioProvider,
 	vllmProvider,
 	openaiProvider,

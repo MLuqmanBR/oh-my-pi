@@ -279,9 +279,9 @@ async function fetchOllamaNativeModels(
  * or omits a `model_info.<arch>.context_length` field. Matches the size
  * Ollama's cloud catalog reports for stock models.
  */
-const OLLAMA_FALLBACK_CONTEXT_WINDOW = 128_000;
+const OLLAMA_FALLBACK_CONTEXT_WINDOW = UNK_CONTEXT_WINDOW;
 /** Cap max output tokens at a value that matches OMP's other openai-responses defaults. */
-const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
+const OLLAMA_DEFAULT_MAX_TOKENS = UNK_MAX_TOKENS;
 /**
  * Ollama's OpenAI-compatible `reasoning.effort` only accepts
  * `high|medium|low|max|none`; passing OMP's `minimal`/`xhigh` levels verbatim
@@ -1781,7 +1781,11 @@ export function alibabaCodingPlanModelManagerOptions(
 				apiKey,
 				mapModel: (entry, defaults) => {
 					const reference = references.get(defaults.id);
-					return mapWithBundledReference(entry, defaults, reference);
+					const model = mapWithBundledReference(entry, defaults, reference);
+					return {
+						...model,
+						input: ["text", "image"],
+					};
 				},
 				fetch: config?.fetch,
 			}),
@@ -1961,6 +1965,41 @@ export function apiGatewayModelManagerOptions(
 					apiKey,
 					mapModel: (entry, defaults) => ({
 						...defaults,
+						input: ["text", "image"],
+						reasoning: true,
+						thinking: {
+							mode: "effort",
+							efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
+						},
+						...(typeof entry.context_window === "number" && entry.context_window > 0
+							? { contextWindow: entry.context_window }
+							: {}),
+					}),
+					fetch: config?.fetch,
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// 12.6 OmniRoute (local OpenAI-compatible proxy)
+// ---------------------------------------------------------------------------
+
+export function omnirouteModelManagerOptions(config?: SimpleProviderConfig): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? Bun.env.OMNIROUTE_BASE_URL ?? "http://localhost:5001/v1";
+	return {
+		providerId: "omniroute",
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "omniroute",
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => ({
+						...defaults,
+						input: ["text", "image"],
 						reasoning: true,
 						thinking: {
 							mode: "effort",
@@ -2292,7 +2331,7 @@ export function litellmModelManagerOptions(
 		// gateway providers (fireworks et al.) use — instead of a bundled map.
 		fetchDynamicModels: async () => {
 			const modelsDevReferences = await loadModelsDevReferences<"openai-completions">(config?.fetch);
-			return fetchOpenAICompatibleModels({
+			const models = await fetchOpenAICompatibleModels({
 				api: "openai-completions",
 				provider: "litellm",
 				baseUrl,
@@ -2301,6 +2340,12 @@ export function litellmModelManagerOptions(
 					mapWithBundledReference(entry, defaults, modelsDevReferences.get(defaults.id)),
 				fetch: config?.fetch,
 			});
+			if (models) {
+				for (const model of models) {
+					model.input = ["text", "image"];
+				}
+			}
+			return models;
 		},
 	};
 }
@@ -2331,6 +2376,7 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 					const model = mapWithBundledReference(entry, defaults, references.get(defaults.id));
 					return {
 						...model,
+						input: ["text", "image"],
 						contextWindow: toPositiveNumber(entry.max_model_len, model.contextWindow),
 					};
 				},

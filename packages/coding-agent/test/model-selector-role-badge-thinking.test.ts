@@ -154,7 +154,7 @@ describe("ModelSelector role badge thinking display", () => {
 		expect(rendered).toContain("[SLOW auto]");
 	});
 
-	test("dims and disables models below the current context size", async () => {
+	test("never disables models based on context window size", async () => {
 		installTestTheme();
 		const settings = Settings.isolated({});
 		const small = createContextTestModel("a-small", 4096);
@@ -169,13 +169,14 @@ describe("ModelSelector role badge thinking display", () => {
 
 		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(rendered).toContain("a-small");
-		expect(rendered).toContain("context>4.1k");
+		expect(rendered).not.toContain("context>");
 
+		// First item (a-small) is selectable — no context-based exclusion
 		selector.handleInput("\n");
-		expect(selected).toEqual(["b-large"]);
+		expect(selected).toEqual(["a-small"]);
 	});
 
-	test("does not open the model menu when every candidate is disabled", async () => {
+	test("allows opening the model menu when only one model exists regardless of context", async () => {
 		installTestTheme();
 		const settings = Settings.isolated({});
 		const small = createContextTestModel("only-small", 4096);
@@ -188,12 +189,12 @@ describe("ModelSelector role badge thinking display", () => {
 
 		const rendered = normalizeRenderedText(selector.render(220).join("\n"));
 		expect(rendered).toContain("only-small");
-		expect(rendered).toContain("current context 6k > 4.1k limit");
+		expect(rendered).not.toContain("current context");
 
+		// Scoped selector opens the role menu on Enter
 		selector.handleInput("\n");
 		const afterEnter = normalizeRenderedText(selector.render(220).join("\n"));
-		expect(afterEnter).not.toContain("Action for");
-		expect(onSelect).not.toHaveBeenCalled();
+		expect(afterEnter).toContain("Action for");
 	});
 
 	test("uses cached models for Enter while offline refresh is still pending", () => {

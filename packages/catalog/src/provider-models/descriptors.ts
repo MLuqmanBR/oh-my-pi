@@ -30,6 +30,7 @@ import {
 	nanoGptModelManagerOptions,
 	nvidiaModelManagerOptions,
 	ollamaModelManagerOptions,
+	omnirouteModelManagerOptions,
 	openaiModelManagerOptions,
 	opencodeGoModelManagerOptions,
 	opencodeZenModelManagerOptions,
@@ -57,6 +58,12 @@ export const CATALOG_PROVIDERS = [
 		defaultModel: "auto",
 		envVars: ["API_GATEWAY_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => apiGatewayModelManagerOptions(config),
+	},
+	{
+		id: "omniroute",
+		defaultModel: "auto",
+		envVars: ["OMNIROUTE_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => omnirouteModelManagerOptions(config),
 	},
 	{
 		id: "aimlapi",

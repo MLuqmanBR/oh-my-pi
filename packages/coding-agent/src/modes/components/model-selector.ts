@@ -698,9 +698,8 @@ export class ModelSelectorComponent extends Container {
 		return this.#getActiveTabId() === CANONICAL_TAB;
 	}
 
-	#isModelOverContextLimit(model: Model): boolean {
-		const contextWindow = model.contextWindow ?? 0;
-		return this.#currentContextTokens > 0 && contextWindow > 0 && this.#currentContextTokens > contextWindow;
+	#isModelOverContextLimit(_model: Model): boolean {
+		return false;
 	}
 
 	#isItemDisabled(item: ModelItem | CanonicalModelItem): boolean {
