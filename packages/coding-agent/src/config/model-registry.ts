@@ -1010,7 +1010,12 @@ export class ModelRegistry {
 				discovery: { type: "ollama" },
 				optional: true,
 			});
-			this.#keylessProviders.add("ollama");
+			// Only mark as keyless if no auth is configured — allows implicit
+			// HTTP discovery without API key for local Ollama servers; menu
+			// visibility is gated on hasAuth() in #createAvailabilityCheck().
+			if (!this.authStorage.hasAuth("ollama")) {
+				this.#keylessProviders.add("ollama");
+			}
 		}
 		if (!configuredProviders.has("llama.cpp") && !disabledProviders.has("llama.cpp")) {
 			this.#discoverableProviders.push({
@@ -1033,7 +1038,12 @@ export class ModelRegistry {
 				discovery: { type: "lm-studio" },
 				optional: true,
 			});
-			this.#keylessProviders.add("lm-studio");
+			// Only mark as keyless if no auth is configured — allows implicit
+			// HTTP discovery without API key for local LM Studio; menu
+			// visibility is gated on hasAuth() in #createAvailabilityCheck().
+			if (!this.authStorage.hasAuth("lm-studio")) {
+				this.#keylessProviders.add("lm-studio");
+			}
 		}
 	}
 
@@ -1605,9 +1615,7 @@ export class ModelRegistry {
 		return model => {
 			let available = byProvider.get(model.provider);
 			if (available === undefined) {
-				available =
-					!disabledProviders.has(model.provider) &&
-					(this.#keylessProviders.has(model.provider) || this.authStorage.hasAuth(model.provider));
+				available = !disabledProviders.has(model.provider) && this.authStorage.hasAuth(model.provider);
 				byProvider.set(model.provider, available);
 			}
 			return available;
@@ -1737,14 +1745,12 @@ export class ModelRegistry {
 	 * Mirrors the upstream `@mariozechner/pi-coding-agent` API surface so that
 	 * external plugins/extensions and downstream wrappers (e.g. subagent launch
 	 * paths that pre-flight auth before model resolution) can probe a model
-	 * without resolving an API key. Returns true for keyless providers as well
-	 * as providers with stored credentials. See issue #993.
+	 * without resolving an API key. Returns true when auth is configured.
+	 * See issue #993.
 	 */
 	hasConfiguredAuth(model: Model<Api>): boolean {
 		const commandKey = this.#resolveCommandBackedApiKey(model.provider);
-		return (
-			commandKey.configured || this.#keylessProviders.has(model.provider) || this.authStorage.hasAuth(model.provider)
-		);
+		return commandKey.configured || this.authStorage.hasAuth(model.provider);
 	}
 
 	getDiscoverableProviders(): string[] {

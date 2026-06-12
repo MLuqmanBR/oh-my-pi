@@ -48,6 +48,12 @@ describe("ModelRegistry LM Studio Fixes", () => {
 			return Promise.resolve(new Response(null, { status: 404 }));
 		};
 
+		// Simulate login for both implicit providers so they appear
+		// in getAvailable(). The OLLAMA_LOCAL_TOKEN sentinel matches
+		// what loginOllama returns for local no-auth mode.
+		authStorage.setRuntimeApiKey("ollama", "ollama-local");
+		authStorage.setRuntimeApiKey("lm-studio", "lm-studio-local");
+
 		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
 		await registry.refresh();
 
@@ -78,6 +84,8 @@ describe("ModelRegistry LM Studio Fixes", () => {
 				}
 				return Promise.resolve(new Response(null, { status: 404 }));
 			};
+
+			authStorage.setRuntimeApiKey("lm-studio", "lm-studio-local");
 
 			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
 			await registry.refresh();

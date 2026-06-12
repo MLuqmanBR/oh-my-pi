@@ -1,6 +1,9 @@
 # Changelog
-
 ## [Unreleased]
+
+### Fixed
+
+- Fixed Ollama, llama.cpp, and LM Studio always appearing in the models menu regardless of login state. These implicit local providers now require explicit login via `/login` (or an env var API key) before their models appear in the selector, matching every other provider's visibility contract. Discovery still occurs without credentials so models load once logged in.
 
 ## [15.12.3] - 2026-06-12
 

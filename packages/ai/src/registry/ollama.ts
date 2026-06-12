@@ -3,17 +3,21 @@ import type { ProviderDefinition } from "./types";
 
 const OLLAMA_DOCS_URL = "https://github.com/ollama/ollama/blob/main/docs/api.md";
 
+/** Sentinel stored when the user opts for local no-auth mode. */
+export const OLLAMA_LOCAL_TOKEN = "ollama-local";
+
 /**
  * Login to Ollama.
  *
- * Returns a trimmed API key/token string. Empty string means local no-auth mode.
+ * Returns a trimmed API key/token string, or the `OLLAMA_LOCAL_TOKEN`
+ * sentinel when the user leaves the prompt empty for local no-auth mode.
  */
 export async function loginOllama(options: OAuthController): Promise<string> {
 	if (options.signal?.aborted) {
 		throw new Error("Login cancelled");
 	}
 	if (!options.onPrompt) {
-		return "";
+		return OLLAMA_LOCAL_TOKEN;
 	}
 
 	options.onAuth?.({
@@ -24,7 +28,7 @@ export async function loginOllama(options: OAuthController): Promise<string> {
 
 	const apiKey = await options.onPrompt({
 		message: "Paste your Ollama API key/token (optional)",
-		placeholder: "ollama-local",
+		placeholder: OLLAMA_LOCAL_TOKEN,
 		allowEmpty: true,
 	});
 
@@ -32,7 +36,8 @@ export async function loginOllama(options: OAuthController): Promise<string> {
 		throw new Error("Login cancelled");
 	}
 
-	return apiKey.trim();
+	const trimmed = apiKey.trim();
+	return trimmed || OLLAMA_LOCAL_TOKEN;
 }
 
 export const ollamaProvider = {

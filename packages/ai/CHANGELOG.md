@@ -1,7 +1,13 @@
 # Changelog
-
 ## [Unreleased]
 
+### Added
+
+- Added `llama.cpp` login handler (`/login llama.cpp`): returns a local-no-auth sentinel when the user leaves the prompt empty, mirroring LM Studio and vLLM patterns.
+
+### Fixed
+
+- Fixed Ollama login returning an empty string for local no-auth mode, which the auth storage silently skipped — `/login ollama` now returns a sentinel token (`ollama-local`) matching the LM Studio pattern, so auth lookups recognize the provider as logged-in for menu visibility.
 ## [15.12.1] - 2026-06-12
 
 ### Added

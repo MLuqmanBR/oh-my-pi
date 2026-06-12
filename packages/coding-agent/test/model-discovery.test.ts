@@ -116,12 +116,13 @@ describe("ModelRegistry runtime discovery", () => {
 
 	test("auto-discovers ollama models without provider config", async () => {
 		const fetchMock = mockOllamaDiscovery(["phi4-mini"]);
+		authStorage.setRuntimeApiKey("ollama", "ollama-local");
 		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
 		await registry.refresh();
 		const ollamaModels = getModelsForProvider(registry, "ollama");
 		expect(ollamaModels.some(m => m.id === "phi4-mini")).toBe(true);
 		expect(registry.getAvailable().some(m => m.provider === "ollama" && m.id === "phi4-mini")).toBe(true);
-		expect(await registry.getApiKey(ollamaModels[0])).toBe(kNoAuth);
+		expect(await registry.getApiKey(ollamaModels[0])).toBe("ollama-local");
 	});
 
 	test("uses OLLAMA_HOST for implicit ollama discovery", async () => {
@@ -214,6 +215,7 @@ describe("ModelRegistry runtime discovery", () => {
 			throw new Error(`Unexpected URL: ${url}`);
 		};
 
+		authStorage.setRuntimeApiKey("ollama", "ollama-local");
 		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
 		await registry.refresh();
 
@@ -262,6 +264,7 @@ describe("ModelRegistry runtime discovery", () => {
 			throw new Error(`Unexpected URL: ${url}`);
 		};
 
+		authStorage.setRuntimeApiKey("ollama", "ollama-local");
 		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
 		await registry.refresh();
 
@@ -271,7 +274,7 @@ describe("ModelRegistry runtime discovery", () => {
 
 		const available = registry.getAvailable().filter(m => m.provider === "ollama");
 		expect(available.length).toBe(2);
-		expect(await registry.getApiKey(available[0])).toBe(kNoAuth);
+		expect(await registry.getApiKey(available[0])).toBe("ollama-local");
 	});
 
 	test("normalizes cached ollama completions rows to responses on load", () => {
