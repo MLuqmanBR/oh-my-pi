@@ -9,16 +9,17 @@ async function loginApiGateway(options: OAuthController): Promise<string> {
 	}
 
 	const apiKey = await options.onPrompt({
-		message: "Paste your API Gateway key (set API_GATEWAY_BASE_URL env var to change the endpoint)",
+		message: "Paste your API Gateway key (optional, set API_GATEWAY_BASE_URL env var to change the endpoint)",
 		placeholder: "api-gateway-...",
-		allowEmpty: false,
+		allowEmpty: true,
 	});
 
 	if (options.signal?.aborted) {
 		throw new Error("Login cancelled");
 	}
 
-	return apiKey.trim();
+	const trimmed = apiKey.trim();
+	return trimmed || "api-gateway-local";
 }
 
 export const apiGatewayProvider = {

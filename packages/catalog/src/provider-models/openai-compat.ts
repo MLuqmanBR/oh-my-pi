@@ -1928,6 +1928,13 @@ export function lmStudioModelManagerOptions(
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? Bun.env.LM_STUDIO_BASE_URL ?? "http://127.0.0.1:1234/v1";
 	const references = createBundledReferenceMap<"openai-completions">("lm-studio" as any);
+	const permissiveThinking = {
+		reasoning: true,
+		thinking: {
+			mode: "effort" as const,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as readonly Effort[],
+		},
+	};
 	return {
 		providerId: "lm-studio",
 		fetchDynamicModels: () =>
@@ -1936,10 +1943,11 @@ export function lmStudioModelManagerOptions(
 				provider: "lm-studio",
 				baseUrl,
 				apiKey,
-				mapModel: (entry, defaults) => {
-					const reference = references.get(defaults.id);
-					return mapWithBundledReference(entry, defaults, reference);
-				},
+				mapModel: (entry, defaults) => ({
+					...mapWithBundledReference(entry, defaults, references.get(defaults.id)),
+					...permissiveThinking,
+					input: ["text", "image"],
+				}),
 				fetch: config?.fetch,
 			}),
 	};
@@ -1954,30 +1962,31 @@ export function apiGatewayModelManagerOptions(
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? Bun.env.API_GATEWAY_BASE_URL ?? "http://localhost:3001/v1";
+	const permissiveDefaults = {
+		input: ["text", "image"] as ("text" | "image")[],
+		reasoning: true,
+		thinking: {
+			mode: "effort" as const,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as readonly Effort[],
+		},
+	};
 	return {
 		providerId: "api-gateway",
-		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
-					api: "openai-completions",
-					provider: "api-gateway",
-					baseUrl,
-					apiKey,
-					mapModel: (entry, defaults) => ({
-						...defaults,
-						input: ["text", "image"],
-						reasoning: true,
-						thinking: {
-							mode: "effort",
-							efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
-						},
-						...(typeof entry.context_window === "number" && entry.context_window > 0
-							? { contextWindow: entry.context_window }
-							: {}),
-					}),
-					fetch: config?.fetch,
+		fetchDynamicModels: () =>
+			fetchOpenAICompatibleModels({
+				api: "openai-completions",
+				provider: "api-gateway",
+				baseUrl,
+				apiKey,
+				mapModel: (entry, defaults) => ({
+					...defaults,
+					...permissiveDefaults,
+					...(typeof entry.context_window === "number" && entry.context_window > 0
+						? { contextWindow: entry.context_window }
+						: {}),
 				}),
-		}),
+				fetch: config?.fetch,
+			}),
 	};
 }
 
@@ -1988,30 +1997,31 @@ export function apiGatewayModelManagerOptions(
 export function omnirouteModelManagerOptions(config?: SimpleProviderConfig): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? Bun.env.OMNIROUTE_BASE_URL ?? "http://localhost:5001/v1";
+	const permissiveDefaults = {
+		input: ["text", "image"] as ("text" | "image")[],
+		reasoning: true,
+		thinking: {
+			mode: "effort" as const,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as readonly Effort[],
+		},
+	};
 	return {
 		providerId: "omniroute",
-		...(apiKey && {
-			fetchDynamicModels: () =>
-				fetchOpenAICompatibleModels({
-					api: "openai-completions",
-					provider: "omniroute",
-					baseUrl,
-					apiKey,
-					mapModel: (entry, defaults) => ({
-						...defaults,
-						input: ["text", "image"],
-						reasoning: true,
-						thinking: {
-							mode: "effort",
-							efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh],
-						},
-						...(typeof entry.context_window === "number" && entry.context_window > 0
-							? { contextWindow: entry.context_window }
-							: {}),
-					}),
-					fetch: config?.fetch,
+		fetchDynamicModels: () =>
+			fetchOpenAICompatibleModels({
+				api: "openai-completions",
+				provider: "omniroute",
+				baseUrl,
+				apiKey,
+				mapModel: (entry, defaults) => ({
+					...defaults,
+					...permissiveDefaults,
+					...(typeof entry.context_window === "number" && entry.context_window > 0
+						? { contextWindow: entry.context_window }
+						: {}),
 				}),
-		}),
+				fetch: config?.fetch,
+			}),
 	};
 }
 
@@ -2322,13 +2332,15 @@ export function litellmModelManagerOptions(
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? "http://localhost:4000/v1";
+	const permissiveThinking = {
+		reasoning: true,
+		thinking: {
+			mode: "effort" as const,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as readonly Effort[],
+		},
+	};
 	return {
 		providerId: "litellm",
-		// litellm is a local-only proxy whose /v1/models returns bare ids with no
-		// metadata, and it is never bundled in models.json (that would leak the
-		// machine's localhost catalog). It proxies known upstream models, so we
-		// enrich discovered ids against models.dev — the same reference source the
-		// gateway providers (fireworks et al.) use — instead of a bundled map.
 		fetchDynamicModels: async () => {
 			const modelsDevReferences = await loadModelsDevReferences<"openai-completions">(config?.fetch);
 			const models = await fetchOpenAICompatibleModels({
@@ -2336,8 +2348,10 @@ export function litellmModelManagerOptions(
 				provider: "litellm",
 				baseUrl,
 				apiKey,
-				mapModel: (entry, defaults) =>
-					mapWithBundledReference(entry, defaults, modelsDevReferences.get(defaults.id)),
+				mapModel: (entry, defaults) => {
+					const model = mapWithBundledReference(entry, defaults, modelsDevReferences.get(defaults.id));
+					return { ...model, ...permissiveThinking };
+				},
 				fetch: config?.fetch,
 			});
 			if (models) {
@@ -2364,6 +2378,13 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? "http://127.0.0.1:8000/v1";
 	const references = createBundledReferenceMap<"openai-completions">("vllm" as Parameters<typeof getBundledModels>[0]);
+	const permissiveThinking = {
+		reasoning: true,
+		thinking: {
+			mode: "effort" as const,
+			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as readonly Effort[],
+		},
+	};
 	return {
 		providerId: "vllm",
 		fetchDynamicModels: () =>
@@ -2376,6 +2397,7 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 					const model = mapWithBundledReference(entry, defaults, references.get(defaults.id));
 					return {
 						...model,
+						...permissiveThinking,
 						input: ["text", "image"],
 						contextWindow: toPositiveNumber(entry.max_model_len, model.contextWindow),
 					};

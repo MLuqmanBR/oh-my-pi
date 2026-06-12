@@ -8,6 +8,7 @@
 import { type ApiKey, type FetchImpl, withAuth } from "@oh-my-pi/pi-ai";
 import type { Api, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import {
 	getBundledModelReferenceIndex,
 	resolveModelReference,
@@ -395,6 +396,16 @@ export async function discoverOpenAIModelsList(
 		: await attempt(baseHeaders);
 	const payload = (await response.json()) as { data?: Array<{ id: string }> };
 	const models = payload.data ?? [];
+	const permissiveThinking =
+		providerConfig.api === "openai-completions"
+			? {
+					reasoning: true as const,
+					thinking: {
+						mode: "effort" as const,
+						efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as readonly Effort[],
+					},
+				}
+			: {};
 	const discovered: Model<Api>[] = [];
 	for (const item of models) {
 		const id = item.id;
@@ -406,7 +417,7 @@ export async function discoverOpenAIModelsList(
 				api: providerConfig.api,
 				provider: providerConfig.provider,
 				baseUrl,
-				reasoning: false,
+				...permissiveThinking,
 				input: ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: 128000,

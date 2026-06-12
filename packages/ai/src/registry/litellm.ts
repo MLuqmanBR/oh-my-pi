@@ -20,8 +20,9 @@ export async function loginLiteLLM(options: OAuthController): Promise<string> {
 	});
 
 	const apiKey = await options.onPrompt({
-		message: "Paste your LiteLLM API key (master key or virtual key)",
+		message: "Paste your LiteLLM API key (optional, leave empty for local no-auth)",
 		placeholder: "sk-...",
+		allowEmpty: true,
 	});
 
 	if (options.signal?.aborted) {
@@ -29,11 +30,7 @@ export async function loginLiteLLM(options: OAuthController): Promise<string> {
 	}
 
 	const trimmed = apiKey.trim();
-	if (!trimmed) {
-		throw new Error("API key is required");
-	}
-
-	return trimmed;
+	return trimmed || "litellm-local";
 }
 
 export const litellmProvider = {

@@ -9,16 +9,17 @@ async function loginOmniRoute(options: OAuthController): Promise<string> {
 	}
 
 	const apiKey = await options.onPrompt({
-		message: "Paste your OmniRoute key (set OMNIROUTE_BASE_URL env var to change the endpoint)",
+		message: "Paste your OmniRoute key (optional, set OMNIROUTE_BASE_URL env var to change the endpoint)",
 		placeholder: "omniroute-...",
-		allowEmpty: false,
+		allowEmpty: true,
 	});
 
 	if (options.signal?.aborted) {
 		throw new Error("Login cancelled");
 	}
 
-	return apiKey.trim();
+	const trimmed = apiKey.trim();
+	return trimmed || "omniroute-local";
 }
 
 export const omnirouteProvider = {
