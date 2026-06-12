@@ -90,7 +90,7 @@ describe("ollama provider context window discovery (issue #847)", () => {
 		expect(showCalls).toEqual(["deepseek-v4-flash:cloud"]);
 	});
 
-	test("falls back to 128k when /api/show is unavailable", async () => {
+	test("falls back to unk context window when /api/show is unavailable", async () => {
 		const fetchMock: FetchImpl = vi.fn(async input => {
 			const url = String(input);
 			if (url === "http://127.0.0.1:11434/v1/models") {
@@ -108,6 +108,6 @@ describe("ollama provider context window discovery (issue #847)", () => {
 		const options = ollamaModelManagerOptions({ fetch: fetchMock });
 		const models = await options.fetchDynamicModels?.();
 		const mystery = models?.find(m => m.id === "mystery:1b");
-		expect(mystery?.contextWindow).toBe(128000);
+		expect(mystery?.contextWindow).toBe(222222);
 	});
 });
