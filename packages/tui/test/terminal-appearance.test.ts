@@ -35,6 +35,8 @@ function restoreEnv(key: string, original: string | undefined): void {
 
 describe("ProcessTerminal OSC 11 appearance detection", () => {
 	beforeEach(() => {
+		delete Bun.env.WSL_INTEROP;
+		delete Bun.env.WSL_DISTRO_NAME;
 		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
 		Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
 		Object.defineProperty(process.stdin, "setRawMode", { value: vi.fn(), configurable: true });
