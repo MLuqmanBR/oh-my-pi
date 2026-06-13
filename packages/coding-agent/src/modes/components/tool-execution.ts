@@ -8,6 +8,7 @@ import {
 	Image,
 	ImageProtocol,
 	imageFallback,
+	type NativeScrollbackLiveRegion,
 	Spacer,
 	TERMINAL,
 	Text,
@@ -160,7 +161,7 @@ let toolExecutionInstanceSeq = 0;
 /**
  * Component that renders a tool call with its result (updateable)
  */
-export class ToolExecutionComponent extends Container {
+export class ToolExecutionComponent extends Container implements NativeScrollbackLiveRegion {
 	#contentBox: Box; // Used for custom tools and bash visual truncation
 	#contentText: Text; // For built-in tools (with its own padding/bg)
 	#multiFileBoxes: (Box | Spacer)[] = []; // Extra boxes for multi-file edit results
@@ -189,7 +190,8 @@ export class ToolExecutionComponent extends Container {
 	#editDiffPreview?: PerFileDiffPreview[];
 	#editDiffAbort?: AbortController;
 	#editDiffLastArgsKey?: string;
-	// Latest in-flight streaming diff recompute, captured so it can be awaited.
+	// Generation bumped on each new preview diff request; stale completions are dropped.
+	#editDiffGeneration = 0;
 	#editDiffInFlight?: Promise<void>;
 	// Cached converted images for Kitty protocol (which requires PNG), keyed by index
 	#convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
@@ -346,8 +348,9 @@ export class ToolExecutionComponent extends Container {
 		}
 		if (argsKey === this.#editDiffLastArgsKey) return;
 		this.#editDiffLastArgsKey = argsKey;
-
 		this.#editDiffAbort?.abort();
+		this.#editDiffGeneration++;
+		const generation = this.#editDiffGeneration;
 		const controller = new AbortController();
 		this.#editDiffAbort = controller;
 
@@ -362,14 +365,14 @@ export class ToolExecutionComponent extends Container {
 				allowFuzzy: this.#editAllowFuzzy,
 				isStreaming,
 			});
-			if (controller.signal.aborted) return;
+			if (controller.signal.aborted || generation !== this.#editDiffGeneration) return;
 			if (previews) {
 				this.#editDiffPreview = isStreaming ? stabilizeStreamingPreviews(previews) : previews;
 				this.#updateDisplay();
 				this.#ui.requestRender();
 			}
 		} catch (err) {
-			if (controller.signal.aborted) return;
+			if (controller.signal.aborted || generation !== this.#editDiffGeneration) return;
 			logger.warn("Edit preview diff failed", { tool: this.#toolName, error: String(err) });
 		}
 	}
@@ -399,9 +402,12 @@ export class ToolExecutionComponent extends Container {
 		// call replaces it instead of stacking another waiting frame (see the
 		// event controller's displaceable-poll bookkeeping).
 		this.#displaceable = this.#toolName === "job" && result.isError !== true && isWaitingPollDetails(result.details);
-		// When tool is complete, ensure args are marked complete so spinner stops
 		if (!isPartial) {
 			this.#argsComplete = true;
+			this.#editDiffAbort?.abort();
+			this.#editDiffGeneration++;
+			this.#editDiffPreview = undefined;
+			this.#editDiffLastArgsKey = undefined;
 		}
 		this.#updateSpinnerAnimation();
 		this.#updateTodoStrikeAnimation();
@@ -587,6 +593,18 @@ export class ToolExecutionComponent extends Container {
 		// continues while it runs and would otherwise pin an unbounded live region);
 		// a foreground tool streaming partial output stays live until it finishes.
 		return (this.#result.details as { async?: { state?: string } } | undefined)?.async?.state === "running";
+	}
+
+	getNativeScrollbackLiveRegionStart(): number | undefined {
+		// When the block is still live (not finalized), fence ALL rows out of
+		// native scrollback. Streaming previews (edit diff, bash output, eval
+		// cells) are tail-anchored views the result render replaces wholesale;
+		// committing mid-stream rows would strand stale preview content in
+		// terminal history that the final block can never erase (see
+		// TranscriptContainer's per-block live-region seam, which routes
+		// through isTranscriptBlockFinalized). A standalone instance (no
+		// TranscriptContainer wrapper, as in tests) must self-fence.
+		return this.isTranscriptBlockFinalized() ? undefined : 0;
 	}
 
 	/**
@@ -985,7 +1003,7 @@ export class ToolExecutionComponent extends Container {
 					context.perFileDiffPreview = previews;
 				}
 			}
-			if (!previews?.some(preview => preview.diff)) {
+			if (!previews?.some(preview => preview.diff) && !this.#result) {
 				const editMode = this.#editMode;
 				const strategy = editMode ? EDIT_MODE_STRATEGIES[editMode] : undefined;
 				const fallback = strategy?.renderStreamingFallback(getArgsWithStreamedTextInput(this.#args), theme);

@@ -423,23 +423,29 @@ export class VirtualTerminal implements Terminal {
 		const clearScrollbackAfterFullClear = "\x1b[2J\x1b[H\x1b[3J";
 		const clearIndex = data.indexOf(clearScrollbackAfterFullClear);
 		if (clearIndex >= 0 && this.#canRecreateForFullClear(data, clearIndex)) {
-			// ghostty-web 0.4 can trap in WASM when libghostty-vt processes a
-			// full-clear + ED3 repaint against an existing history buffer. The
-			// sequence's observable effect here is a blank terminal with empty
-			// history before repainting the transcript, so create exactly that
-			// state directly in a fresh WASM instance and feed Ghostty the
-			// unmodified text/SGR tail.
 			this.#recreate();
 			data = data.slice(0, clearIndex) + data.slice(clearIndex + clearScrollbackAfterFullClear.length);
-		} else if (this.#pendingEngineResize) {
+		} else if (this.#pendingEngineResize && !data.includes("\x1b[2J")) {
+			// Process the pending resize BEFORE writing when the data doesn't
+			// clear the screen: ordinary writes (key echo, status updates)
+			// want the new geometry first.
 			this.#term.resize(this.#columns, this.#rows);
 			this.#eventLog.push({ columns: this.#columns, rows: this.#rows });
-			this.#historyTextCache.length = 0; // engine rewraps scrollback on resize
+			this.#historyTextCache.length = 0;
 			this.#pendingEngineResize = false;
 		}
+		// When data DOES include a screen clear (\x1b[2J), defer the resize
+		// until AFTER the write: ghostty pushes old grid to scrollback on
+		// resize, so the ED2 must blank the viewport first.
 		data = this.#stripSynchronizedOutput(data);
 		data = stripCombiningMarksForGhostty(data);
 		this.#writeToGhostty(data);
+		if (this.#pendingEngineResize) {
+			this.#term.resize(this.#columns, this.#rows);
+			this.#eventLog.push({ columns: this.#columns, rows: this.#rows });
+			this.#historyTextCache.length = 0;
+			this.#pendingEngineResize = false;
+		}
 		this.#refollowBottom(wasBottom);
 	}
 
