@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 
 import { rewriteImports, wrapCode } from "@oh-my-pi/pi-coding-agent/eval/js/context-manager";
 import { indirectEval } from "@oh-my-pi/pi-coding-agent/eval/js/shared/indirect-eval";
@@ -10,6 +10,10 @@ const IMPORT = "import";
 const dyn = (rest: string) => `${IMPORT}${rest}`;
 
 describe("rewriteImports", () => {
+	afterEach(() => {
+		delete (globalThis as any).__omp_import__;
+	});
+
 	it("rewrites a top-level default import", async () => {
 		const out = await rewriteImports(`${IMPORT} foo from "bar";\nconsole.log(foo);`);
 		expect(out).toContain('await __omp_import__("bar")');

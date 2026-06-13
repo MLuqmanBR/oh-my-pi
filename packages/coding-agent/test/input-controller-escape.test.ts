@@ -75,7 +75,10 @@ function createContext(): {
 	let editorText = "";
 	const abort = vi.fn();
 	const abortBash = vi.fn();
+	const abortCompaction = vi.fn();
 	const abortEval = vi.fn();
+	const abortHandoff = vi.fn();
+	const abortRetry = vi.fn();
 	const addMessageToChat = vi.fn();
 	const cancelPendingSubmission = vi.fn(() => false);
 	const clearQueue = vi.fn(() => ({ steering: [], followUp: [] }));
@@ -135,8 +138,6 @@ function createContext(): {
 		retryEscapeHandler: undefined,
 		session: {
 			isStreaming: false,
-			isCompacting: false,
-			isGeneratingHandoff: false,
 			isBashRunning: false,
 			isEvalRunning: false,
 			queuedMessageCount: 0,
@@ -148,6 +149,14 @@ function createContext(): {
 			clearQueue,
 			prompt,
 		} as unknown as InteractiveModeContext["session"],
+		viewSession: {
+			isCompacting: false,
+			isGeneratingHandoff: false,
+			isRetrying: false,
+			abortCompaction,
+			abortHandoff,
+			abortRetry,
+		} as unknown as InteractiveModeContext["viewSession"],
 		sessionManager: {
 			getSessionName: () => "existing session",
 		} as unknown as InteractiveModeContext["sessionManager"],

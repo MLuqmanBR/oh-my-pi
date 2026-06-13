@@ -5,6 +5,7 @@ import {
 	AskTool,
 	BUILTIN_TOOLS,
 	computeEssentialBuiltinNames,
+	GithubTool,
 	createTools,
 	DEFAULT_ESSENTIAL_TOOL_NAMES,
 	filterInitialToolsForDiscoveryAll,
@@ -50,6 +51,7 @@ async function getToolMetadata(): Promise<Map<string, { loadMode?: string; summa
 		new SshTool(toolSession, [], new Map(), ""),
 		new JobTool(toolSession),
 		new IrcTool(toolSession),
+		new GithubTool(toolSession),
 	]) {
 		metadata.set(tool.name, { loadMode: tool.loadMode, summary: tool.summary });
 	}

@@ -21,6 +21,7 @@ describe("AsyncJobManager singleton across concurrent top-level sessions", () =>
 	let sharedModelRegistry: ModelRegistry;
 
 	beforeAll(async () => {
+		AsyncJobManager.resetForTests();
 		sharedTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sdk-async-singleton-shared-"));
 		sharedAuthStorage = await AuthStorage.create(path.join(sharedTempDir, "auth.db"));
 		sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedTempDir, "models.yml"));
