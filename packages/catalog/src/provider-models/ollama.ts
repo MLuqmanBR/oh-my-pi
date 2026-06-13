@@ -122,7 +122,10 @@ export function ollamaCloudModelManagerOptions(
 					}
 					const capabilities = metadata?.capabilities;
 					const contextWindow =
-						getContextWindow(metadata?.model_info) ?? providerReference?.contextWindow ?? 128000;
+						getContextWindow(metadata?.model_info) ??
+						providerReference?.contextWindow ??
+						reference?.contextWindow ??
+						128000;
 					const reasoning = capabilities ? capabilities.includes("thinking") : (reference?.reasoning ?? false);
 					const thinking = capabilities ? getThinkingConfig(capabilities) : reference?.thinking;
 					const input = capabilities
@@ -142,7 +145,7 @@ export function ollamaCloudModelManagerOptions(
 						input,
 						cost: reference?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 						contextWindow,
-						maxTokens: providerReference?.maxTokens ?? Math.min(contextWindow, 8192),
+						maxTokens: providerReference?.maxTokens ?? reference?.maxTokens ?? contextWindow,
 					};
 				}),
 			);

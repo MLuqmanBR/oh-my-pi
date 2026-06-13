@@ -65,7 +65,6 @@ import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
 import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResolver } from "./api-key-resolver";
 import type { ConfigError, ConfigFile } from "./config-file";
 import {
-	DISCOVERY_DEFAULT_MAX_TOKENS,
 	type DiscoveryContext,
 	type DiscoveryProviderConfig,
 	discoverModelsByProviderType,
@@ -995,7 +994,7 @@ export class ModelRegistry {
 			return {
 				...normalized,
 				contextWindow: contextLengthOverride,
-				maxTokens: Math.min(contextLengthOverride, DISCOVERY_DEFAULT_MAX_TOKENS),
+				maxTokens: contextLengthOverride,
 			};
 		});
 	}

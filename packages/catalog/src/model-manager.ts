@@ -1,6 +1,7 @@
 import { buildModel } from "./build";
 import { readModelCache, writeModelCache } from "./model-cache";
 import { type GeneratedProvider, getBundledModels } from "./models";
+import { UNK_CONTEXT_WINDOW, UNK_MAX_TOKENS } from "./provider-models/discovery-constants";
 import type { Api, Model, ModelSpec, Provider } from "./types";
 import { isRecord } from "./utils";
 import { collapseBuiltModelVariants } from "./variant-collapse";
@@ -368,6 +369,12 @@ function preferDiscoveryLimit(discoveryLimit: number, fallbackLimit: number): nu
 		return fallbackLimit;
 	}
 	if (discoveryLimit === 4096 && fallbackLimit > discoveryLimit) {
+		return fallbackLimit;
+	}
+	// Reject UNK sentinels (222222 / 8888) that fetchOpenAICompatibleModels
+	// uses as defaults; prefer the reference value that bundles or earlier
+	// discovery passes provided.
+	if (discoveryLimit === UNK_CONTEXT_WINDOW || discoveryLimit === UNK_MAX_TOKENS) {
 		return fallbackLimit;
 	}
 	return discoveryLimit;

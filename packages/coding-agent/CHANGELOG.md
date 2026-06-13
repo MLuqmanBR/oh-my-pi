@@ -5,6 +5,7 @@
 
 - Fixed Ollama, llama.cpp, and LM Studio always appearing in the models menu regardless of login state. These implicit local providers now require explicit login via `/login` (or an env var API key) before their models appear in the selector, matching every other provider's visibility contract. Discovery still occurs without credentials so models load once logged in.
 
+- Removed `Math.min` clamp on `maxTokens` in coding-agent discovery paths (`discoverOllamaModels`, `discoverLlamaCppModels`) that silently capped max output tokens to `DISCOVERY_DEFAULT_MAX_TOKENS` (32,768). The `normalizeDiscoverableModels` env-var override path no longer clamps `maxTokens` to `Math.min(contextLength, 32768)`. Removed unused `DISCOVERY_DEFAULT_MAX_TOKENS` import from model-registry.
 ## [15.12.3] - 2026-06-12
 
 ### Fixed

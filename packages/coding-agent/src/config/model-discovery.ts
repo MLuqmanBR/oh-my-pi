@@ -277,7 +277,7 @@ export async function discoverOllamaModels(
 			input: metadata?.input ?? ["text"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: metadata?.contextWindow ?? 128000,
-			maxTokens: Math.min(metadata?.contextWindow ?? Number.POSITIVE_INFINITY, DISCOVERY_DEFAULT_MAX_TOKENS),
+			maxTokens: DISCOVERY_DEFAULT_MAX_TOKENS,
 			headers: providerConfig.headers,
 		} as ModelSpec<Api>);
 	});
@@ -354,10 +354,7 @@ export async function discoverLlamaCppModels(
 				input: serverMetadata?.input ?? ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 				contextWindow: serverMetadata?.contextWindow ?? 128000,
-				maxTokens: Math.min(
-					serverMetadata?.contextWindow ?? Number.POSITIVE_INFINITY,
-					DISCOVERY_DEFAULT_MAX_TOKENS,
-				),
+				maxTokens: DISCOVERY_DEFAULT_MAX_TOKENS,
 				headers,
 				compat: {
 					supportsStore: false,

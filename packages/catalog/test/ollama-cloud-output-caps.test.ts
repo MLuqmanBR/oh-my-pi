@@ -44,8 +44,8 @@ test("ollama-cloud discovery does not inherit unsafe cross-provider maxTokens", 
 	const models = await options.fetchDynamicModels?.();
 	const model = models?.find(candidate => candidate.id === "deepseek-v4-flash");
 
-	expect(model?.contextWindow).toBe(128000);
-	expect(model?.maxTokens).toBe(8192);
+	expect(model?.contextWindow).toBe(1_000_000);
+	expect(model?.maxTokens).toBe(384_000);
 });
 
 test("ollama-chat omits num_predict when model opts out of max output tokens", async () => {

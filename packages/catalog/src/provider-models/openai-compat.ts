@@ -263,8 +263,8 @@ async function fetchOllamaNativeModels(
 				thinking: metadata.thinking,
 				input: metadata.input ?? ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: metadata.contextWindow,
-				maxTokens: metadata.maxTokens,
+				contextWindow: metadata.contextWindow ?? OLLAMA_FALLBACK_CONTEXT_WINDOW,
+				maxTokens: metadata.maxTokens ?? OLLAMA_DEFAULT_MAX_TOKENS,
 			};
 		}),
 	);
@@ -300,8 +300,8 @@ function applyOllamaReasoningCompat(model: ModelSpec<"openai-responses">): void 
 }
 
 interface OllamaResolvedMetadata {
-	contextWindow: number;
-	maxTokens: number;
+	contextWindow?: number;
+	maxTokens?: number;
 	capabilities?: string[];
 	reasoning?: boolean;
 	thinking?: ThinkingConfig;
@@ -369,7 +369,7 @@ async function fetchOllamaShowMetadata(
 		const contextWindow = getOllamaContextWindow(payload.model_info);
 		return {
 			contextWindow,
-			maxTokens: contextWindow ? OLLAMA_DEFAULT_MAX_TOKENS : undefined,
+			maxTokens: undefined,
 			capabilities,
 			reasoning: capabilities ? capabilities.includes("thinking") : undefined,
 			thinking: getOllamaThinkingConfig(capabilities),
@@ -403,12 +403,13 @@ function createOllamaMetadataResolver(
 			const metadata = await fetchOllamaShowMetadata(nativeBaseUrl, modelId, fetchImpl);
 			if (!metadata) {
 				cache.delete(modelId);
-				return { contextWindow: OLLAMA_FALLBACK_CONTEXT_WINDOW, maxTokens: OLLAMA_DEFAULT_MAX_TOKENS };
+				// Return empty — caller keeps values from the OpenAI-compatible pass.
+				return {};
 			}
 			return {
 				...metadata,
-				contextWindow: metadata.contextWindow ?? OLLAMA_FALLBACK_CONTEXT_WINDOW,
-				maxTokens: metadata.maxTokens ?? OLLAMA_DEFAULT_MAX_TOKENS,
+				contextWindow: metadata.contextWindow,
+				maxTokens: metadata.maxTokens,
 			};
 		})();
 		cache.set(modelId, pending);
@@ -1519,8 +1520,6 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 						return {
 							...defaults,
 							name: toModelName(entry.name, defaults.name),
-							contextWindow: OLLAMA_FALLBACK_CONTEXT_WINDOW,
-							maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
 						};
 					}
 					return mapWithBundledReference(entry, defaults, reference);
@@ -1531,7 +1530,12 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 				await Promise.all(
 					openAiCompatible.map(async model => {
 						const metadata = await resolveMetadata(model.id);
-						model.contextWindow = metadata.contextWindow;
+						if (metadata.contextWindow !== undefined) {
+							model.contextWindow = metadata.contextWindow;
+						}
+						if (metadata.maxTokens !== undefined) {
+							model.maxTokens = metadata.maxTokens;
+						}
 						if (metadata.reasoning !== undefined) {
 							model.reasoning = metadata.reasoning;
 							model.thinking = metadata.thinking;
