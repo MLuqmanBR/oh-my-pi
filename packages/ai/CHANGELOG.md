@@ -1,6 +1,10 @@
 # Changelog
 ## [Unreleased]
 
+### Fixed
+
+- Fixed tool schema conversion for non-Cloud Code Assist Google Gemini models by normalizing parameters with `normalizeSchemaForGoogle` to prevent un-normalized schema properties (such as `additionalProperties: false` or type arrays) from causing Gemini API errors.
+
 ## [15.12.4] - 2026-06-13
 
 ### Added
@@ -11,6 +15,7 @@
 ### Changed
 
 - Replaced the OpenAI SDK client usage in `openai-completions`, `openai-responses`, `azure-openai-responses`, and `openai-codex-responses` with the new internal `postOpenAIStream` OpenAI-wire JSON/SSE transport
+- Bumped Z.AI (GLM Coding Plan) API key validation probe to glm-5.2.
 
 ### Fixed
 
