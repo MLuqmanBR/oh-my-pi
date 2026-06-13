@@ -4,6 +4,7 @@
 ### Fixed
 
 - Removed silent truncation of `contextWindow` and `maxTokens` for dynamically discovered models: `fetchOpenAICompatibleModels` now extracts real API fields (`context_length`, `max_tokens`, etc.) instead of hardcoding `UNK_CONTEXT_WINDOW` (222,222) / `UNK_MAX_TOKENS` (8,888) defaults; `preferDiscoveryLimit` rejects UNK sentinels so bundled reference values win during merge; Ollama `/api/show` no longer fabricates `maxTokens=8888` when `contextWindow` exists; Ollama `/api/show` resolver no longer forces UNK fallbacks when metadata is absent; ollama-cloud no longer clamps `maxTokens` to `Math.min(contextWindow, 8192)` — now uses the provider reference's or cross-bundled-reference's verified value.
+- Fixed the model cache opening with `PRAGMA journal_mode=WAL` before `PRAGMA busy_timeout`, so concurrent omp startups could crash inside `getDb()` on `SQLITE_BUSY` during WAL recovery instead of waiting through the transient lock. The busy handler is now installed before the first lock-taking statement ([#2421](https://github.com/can1357/oh-my-pi/issues/2421)).
 
 ## [15.11.8] - 2026-06-12
 
