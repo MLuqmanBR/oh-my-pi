@@ -148,16 +148,26 @@ BACKUP="${REAL_INSTALLED}.bak"
 # Remove stale backup if present
 rm -f "$BACKUP"
 
-# Atomic replace: backup → copy new → verify → cleanup
+# Atomic replace via temp name: copy to .new, then mv (rename avoids ETXTBUSY
+# when the running binary has the file mapped)
 if ! cp "$REAL_INSTALLED" "$BACKUP" 2>/dev/null; then
     die "Failed to create backup at $BACKUP (permissions?)"
 fi
 
-if ! cp "$BUILT_BINARY" "$REAL_INSTALLED" 2>/dev/null; then
+TEMP_INSTALL="${REAL_INSTALLED}.new"
+rm -f "$TEMP_INSTALL"
+if ! cp "$BUILT_BINARY" "$TEMP_INSTALL" 2>/dev/null; then
     # Restore backup
     cp "$BACKUP" "$REAL_INSTALLED" 2>/dev/null || true
-    rm -f "$BACKUP"
-    die "Failed to copy new binary to $REAL_INSTALLED (permissions?)"
+    rm -f "$BACKUP" "$TEMP_INSTALL"
+    die "Failed to copy new binary to $TEMP_INSTALL (permissions?)"
+fi
+
+if ! mv "$TEMP_INSTALL" "$REAL_INSTALLED" 2>/dev/null; then
+    # Restore backup
+    cp "$BACKUP" "$REAL_INSTALLED" 2>/dev/null || true
+    rm -f "$BACKUP" "$TEMP_INSTALL"
+    die "Failed to install new binary to $REAL_INSTALLED (permissions?)"
 fi
 
 # Verify the replaced binary works
