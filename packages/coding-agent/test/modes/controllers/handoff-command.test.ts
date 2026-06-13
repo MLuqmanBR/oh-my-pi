@@ -28,19 +28,30 @@ describe("/handoff command", () => {
 
 	it("shows a cancellable loader while handoff generation is running", async () => {
 		const handoffStarted = Promise.withResolvers<void>();
-		const handoffDone = Promise.withResolvers<{ document: string; savedPath?: string }>();
+		const handoffDone = Promise.withResolvers<{ document: string }>();
+		let isGeneratingHandoff = false;
 		const statusContainer = createContainer();
 		const chatContainer = createContainer();
 		const abortHandoff = vi.fn();
+		// InputController installs the real Esc handler; CommandController should
+		// leave it in place while showing the handoff loader.
+		const originalOnEscape = vi.fn(() => {
+			if (isGeneratingHandoff) abortHandoff();
+		});
 		const requestRender = vi.fn();
 		const ctx = {
 			sessionManager: {
 				getEntries: () => [{ type: "message" }, { type: "message" }],
 			},
 			session: {
-				handoff: vi.fn(() => {
+				handoff: vi.fn(async () => {
+					isGeneratingHandoff = true;
 					handoffStarted.resolve();
-					return handoffDone.promise;
+					try {
+						return await handoffDone.promise;
+					} finally {
+						isGeneratingHandoff = false;
+					}
 				}),
 				abortHandoff,
 			},
@@ -64,10 +75,9 @@ describe("/handoff command", () => {
 		await handoffStarted.promise;
 
 		expect(statusContainer.children).toHaveLength(1);
-		// Escape dispatch is now centralized in InputController via
-		// viewSession.isGeneratingHandoff; CommandController no longer
-		// swaps editor.onEscape.
-		expect(ctx.session.handoff).toHaveBeenCalledWith("focus on tests");
+		expect(ctx.editor.onEscape).toBe(originalOnEscape);
+		ctx.editor.onEscape?.();
+		expect(abortHandoff).toHaveBeenCalledTimes(1);
 
 		handoffDone.resolve({ document: "## Goal\nContinue" });
 		await commandPromise;

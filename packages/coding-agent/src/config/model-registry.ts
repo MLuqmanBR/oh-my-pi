@@ -17,8 +17,6 @@ import {
 	googleGeminiCliModelManagerOptions,
 	openaiCodexModelManagerOptions,
 	PROVIDER_DESCRIPTORS,
-	UNK_CONTEXT_WINDOW,
-	UNK_MAX_TOKENS,
 } from "@oh-my-pi/pi-catalog/provider-models";
 import {
 	collapseBuiltModelVariants,
@@ -529,9 +527,8 @@ function finalizeCustomModel(model: CustomModelOverlay, options: CustomModelBuil
 		thinking: resolvedModel.thinking ?? reference?.thinking,
 		input: input as ("text" | "image")[],
 		cost,
-		contextWindow:
-			resolvedModel.contextWindow ?? reference?.contextWindow ?? (options.useDefaults ? 128000 : undefined),
-		maxTokens: resolvedModel.maxTokens ?? reference?.maxTokens ?? (options.useDefaults ? 16384 : undefined),
+		contextWindow: resolvedModel.contextWindow ?? reference?.contextWindow ?? (options.useDefaults ? 128000 : null),
+		maxTokens: resolvedModel.maxTokens ?? reference?.maxTokens ?? (options.useDefaults ? 16384 : null),
 		headers: resolvedModel.headers,
 		omitMaxOutputTokens: resolvedModel.omitMaxOutputTokens ?? reference?.omitMaxOutputTokens,
 		compat: mergeCompat(reference?.compatConfig, resolvedModel.compat),
@@ -865,11 +862,8 @@ export class ModelRegistry {
 			if (!existing) return replacementModel;
 			return {
 				...replacementModel,
-				contextWindow:
-					replacementModel.contextWindow === UNK_CONTEXT_WINDOW
-						? existing.contextWindow
-						: replacementModel.contextWindow,
-				maxTokens: replacementModel.maxTokens === UNK_MAX_TOKENS ? existing.maxTokens : replacementModel.maxTokens,
+				contextWindow: replacementModel.contextWindow ?? existing.contextWindow,
+				maxTokens: replacementModel.maxTokens ?? existing.maxTokens,
 			};
 		});
 	}
@@ -1744,12 +1738,23 @@ export class ModelRegistry {
 	 * Mirrors the upstream `@mariozechner/pi-coding-agent` API surface so that
 	 * external plugins/extensions and downstream wrappers (e.g. subagent launch
 	 * paths that pre-flight auth before model resolution) can probe a model
-	 * without resolving an API key. Returns true when auth is configured.
-	 * See issue #993.
+	 * without resolving an API key. Returns true for keyless providers as well
+	 * as providers with stored credentials. See issue #993.
+	 *
+	 * Side-effect-free and synchronous: a command-backed key (`!cmd`) counts as
+	 * configured by its presence alone — the program is NOT executed — and OAuth
+	 * tokens are NOT refreshed (`authStorage.hasAuth`). This is what keeps the
+	 * model-switch pre-flight off the event loop's hot path; the real key
+	 * (command execution + OAuth refresh) is resolved lazily per request via
+	 * {@link ModelRegistry.resolver}.
 	 */
 	hasConfiguredAuth(model: Model<Api>): boolean {
-		const commandKey = this.#resolveCommandBackedApiKey(model.provider);
-		return commandKey.configured || this.authStorage.hasAuth(model.provider);
+		const keyConfig = this.#customProviderApiKeys.get(model.provider);
+		return (
+			isCommandConfigValue(keyConfig) ||
+			this.#keylessProviders.has(model.provider) ||
+			this.authStorage.hasAuth(model.provider)
+		);
 	}
 
 	getDiscoverableProviders(): string[] {
