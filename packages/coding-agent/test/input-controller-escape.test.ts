@@ -81,10 +81,8 @@ function createContext(): {
 	let editorText = "";
 	const abort = vi.fn();
 	const abortBash = vi.fn();
-	const abortCompaction = vi.fn();
 	const abortEval = vi.fn();
 	const abortHandoff = vi.fn();
-
 	const addMessageToChat = vi.fn();
 	const cancelPendingSubmission = vi.fn(() => false);
 	const clearQueue = vi.fn(() => ({ steering: [], followUp: [] }));
@@ -146,6 +144,8 @@ function createContext(): {
 		retryEscapeHandler: undefined,
 		session: {
 			isStreaming: false,
+			isCompacting: false,
+			isGeneratingHandoff: false,
 			isBashRunning: false,
 			isEvalRunning: false,
 			queuedMessageCount: 0,

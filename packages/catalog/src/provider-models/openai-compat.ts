@@ -262,8 +262,8 @@ async function fetchOllamaNativeModels(
 				thinking: metadata.thinking,
 				input: metadata.input ?? ["text"],
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: metadata.contextWindow ?? OLLAMA_FALLBACK_CONTEXT_WINDOW,
-				maxTokens: metadata.maxTokens ?? OLLAMA_DEFAULT_MAX_TOKENS,
+				contextWindow: metadata.contextWindow,
+				maxTokens: metadata.maxTokens,
 			};
 		}),
 	);
@@ -278,9 +278,9 @@ async function fetchOllamaNativeModels(
  * or omits a `model_info.<arch>.context_length` field. Matches the size
  * Ollama's cloud catalog reports for stock models.
  */
-const OLLAMA_FALLBACK_CONTEXT_WINDOW = UNK_CONTEXT_WINDOW;
+const OLLAMA_FALLBACK_CONTEXT_WINDOW = 128_000;
 /** Cap max output tokens at a value that matches OMP's other openai-responses defaults. */
-const OLLAMA_DEFAULT_MAX_TOKENS = UNK_MAX_TOKENS;
+const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 /**
  * Ollama's OpenAI-compatible `reasoning.effort` only accepts
  * `high|medium|low|max|none`; passing OMP's `minimal`/`xhigh` levels verbatim
@@ -299,8 +299,8 @@ function applyOllamaReasoningCompat(model: ModelSpec<"openai-responses">): void 
 }
 
 interface OllamaResolvedMetadata {
-	contextWindow?: number;
-	maxTokens?: number;
+	contextWindow: number;
+	maxTokens: number;
 	capabilities?: string[];
 	reasoning?: boolean;
 	thinking?: ThinkingConfig;
@@ -368,7 +368,7 @@ async function fetchOllamaShowMetadata(
 		const contextWindow = getOllamaContextWindow(payload.model_info);
 		return {
 			contextWindow,
-			maxTokens: undefined,
+			maxTokens: contextWindow ? OLLAMA_DEFAULT_MAX_TOKENS : undefined,
 			capabilities,
 			reasoning: capabilities ? capabilities.includes("thinking") : undefined,
 			thinking: getOllamaThinkingConfig(capabilities),
@@ -402,13 +402,12 @@ function createOllamaMetadataResolver(
 			const metadata = await fetchOllamaShowMetadata(nativeBaseUrl, modelId, fetchImpl);
 			if (!metadata) {
 				cache.delete(modelId);
-				// Return empty — caller keeps values from the OpenAI-compatible pass.
-				return {};
+				return { contextWindow: OLLAMA_FALLBACK_CONTEXT_WINDOW, maxTokens: OLLAMA_DEFAULT_MAX_TOKENS };
 			}
 			return {
 				...metadata,
-				contextWindow: metadata.contextWindow,
-				maxTokens: metadata.maxTokens,
+				contextWindow: metadata.contextWindow ?? OLLAMA_FALLBACK_CONTEXT_WINDOW,
+				maxTokens: metadata.maxTokens ?? OLLAMA_DEFAULT_MAX_TOKENS,
 			};
 		})();
 		cache.set(modelId, pending);
@@ -1639,6 +1638,8 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 						return {
 							...defaults,
 							name: toModelName(entry.name, defaults.name),
+							contextWindow: OLLAMA_FALLBACK_CONTEXT_WINDOW,
+							maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
 						};
 					}
 					return mapWithBundledReference(entry, defaults, reference);
@@ -1649,12 +1650,7 @@ export function ollamaModelManagerOptions(config?: OllamaModelManagerConfig): Mo
 				await Promise.all(
 					openAiCompatible.map(async model => {
 						const metadata = await resolveMetadata(model.id);
-						if (metadata.contextWindow !== undefined) {
-							model.contextWindow = metadata.contextWindow;
-						}
-						if (metadata.maxTokens !== undefined) {
-							model.maxTokens = metadata.maxTokens;
-						}
+						model.contextWindow = metadata.contextWindow;
 						if (metadata.reasoning !== undefined) {
 							model.reasoning = metadata.reasoning;
 							model.thinking = metadata.thinking;
@@ -1904,11 +1900,7 @@ export function alibabaCodingPlanModelManagerOptions(
 				apiKey,
 				mapModel: (entry, defaults) => {
 					const reference = references.get(defaults.id);
-					const model = mapWithBundledReference(entry, defaults, reference);
-					return {
-						...model,
-						input: ["text", "image"],
-					};
+					return mapWithBundledReference(entry, defaults, reference);
 				},
 				fetch: config?.fetch,
 			}),
@@ -2051,13 +2043,6 @@ export function lmStudioModelManagerOptions(
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? Bun.env.LM_STUDIO_BASE_URL ?? "http://127.0.0.1:1234/v1";
 	const references = createBundledReferenceMap<"openai-completions">("lm-studio" as any);
-	const permissiveThinking = {
-		reasoning: true,
-		thinking: {
-			mode: "effort" as const,
-			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as readonly Effort[],
-		},
-	};
 	return {
 		providerId: "lm-studio",
 		fetchDynamicModels: () =>
@@ -2066,83 +2051,10 @@ export function lmStudioModelManagerOptions(
 				provider: "lm-studio",
 				baseUrl,
 				apiKey,
-				mapModel: (entry, defaults) => ({
-					...mapWithBundledReference(entry, defaults, references.get(defaults.id)),
-					...permissiveThinking,
-					input: ["text", "image"],
-				}),
-				fetch: config?.fetch,
-			}),
-	};
-}
-
-// ---------------------------------------------------------------------------
-// 12.5 API Gateway (local OpenAI-compatible proxy)
-// ---------------------------------------------------------------------------
-
-export function apiGatewayModelManagerOptions(
-	config?: SimpleProviderConfig,
-): ModelManagerOptions<"openai-completions"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? Bun.env.API_GATEWAY_BASE_URL ?? "http://localhost:3001/v1";
-	const permissiveDefaults = {
-		input: ["text", "image"] as ("text" | "image")[],
-		reasoning: true,
-		thinking: {
-			mode: "effort" as const,
-			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as readonly Effort[],
-		},
-	};
-	return {
-		providerId: "api-gateway",
-		fetchDynamicModels: () =>
-			fetchOpenAICompatibleModels({
-				api: "openai-completions",
-				provider: "api-gateway",
-				baseUrl,
-				apiKey,
-				mapModel: (entry, defaults) => ({
-					...defaults,
-					...permissiveDefaults,
-					...(typeof entry.context_window === "number" && entry.context_window > 0
-						? { contextWindow: entry.context_window }
-						: {}),
-				}),
-				fetch: config?.fetch,
-			}),
-	};
-}
-
-// ---------------------------------------------------------------------------
-// 12.6 OmniRoute (local OpenAI-compatible proxy)
-// ---------------------------------------------------------------------------
-
-export function omnirouteModelManagerOptions(config?: SimpleProviderConfig): ModelManagerOptions<"openai-completions"> {
-	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? Bun.env.OMNIROUTE_BASE_URL ?? "http://localhost:5001/v1";
-	const permissiveDefaults = {
-		input: ["text", "image"] as ("text" | "image")[],
-		reasoning: true,
-		thinking: {
-			mode: "effort" as const,
-			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as readonly Effort[],
-		},
-	};
-	return {
-		providerId: "omniroute",
-		fetchDynamicModels: () =>
-			fetchOpenAICompatibleModels({
-				api: "openai-completions",
-				provider: "omniroute",
-				baseUrl,
-				apiKey,
-				mapModel: (entry, defaults) => ({
-					...defaults,
-					...permissiveDefaults,
-					...(typeof entry.context_window === "number" && entry.context_window > 0
-						? { contextWindow: entry.context_window }
-						: {}),
-				}),
+				mapModel: (entry, defaults) => {
+					const reference = references.get(defaults.id);
+					return mapWithBundledReference(entry, defaults, reference);
+				},
 				fetch: config?.fetch,
 			}),
 	};
@@ -2455,34 +2367,24 @@ export function litellmModelManagerOptions(
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? "http://localhost:4000/v1";
-	const permissiveThinking = {
-		reasoning: true,
-		thinking: {
-			mode: "effort" as const,
-			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as readonly Effort[],
-		},
-	};
 	return {
 		providerId: "litellm",
+		// litellm is a local-only proxy whose /v1/models returns bare ids with no
+		// metadata, and it is never bundled in models.json (that would leak the
+		// machine's localhost catalog). It proxies known upstream models, so we
+		// enrich discovered ids against models.dev — the same reference source the
+		// gateway providers (fireworks et al.) use — instead of a bundled map.
 		fetchDynamicModels: async () => {
 			const modelsDevReferences = await loadModelsDevReferences<"openai-completions">(config?.fetch);
-			const models = await fetchOpenAICompatibleModels({
+			return fetchOpenAICompatibleModels({
 				api: "openai-completions",
 				provider: "litellm",
 				baseUrl,
 				apiKey,
-				mapModel: (entry, defaults) => {
-					const model = mapWithBundledReference(entry, defaults, modelsDevReferences.get(defaults.id));
-					return { ...model, ...permissiveThinking };
-				},
+				mapModel: (entry, defaults) =>
+					mapWithBundledReference(entry, defaults, modelsDevReferences.get(defaults.id)),
 				fetch: config?.fetch,
 			});
-			if (models) {
-				for (const model of models) {
-					model.input = ["text", "image"];
-				}
-			}
-			return models;
 		},
 	};
 }
@@ -2501,13 +2403,6 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? "http://127.0.0.1:8000/v1";
 	const references = createBundledReferenceMap<"openai-completions">("vllm" as Parameters<typeof getBundledModels>[0]);
-	const permissiveThinking = {
-		reasoning: true,
-		thinking: {
-			mode: "effort" as const,
-			efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] as readonly Effort[],
-		},
-	};
 	return {
 		providerId: "vllm",
 		fetchDynamicModels: () =>
@@ -2520,8 +2415,6 @@ export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelM
 					const model = mapWithBundledReference(entry, defaults, references.get(defaults.id));
 					return {
 						...model,
-						...permissiveThinking,
-						input: ["text", "image"],
 						contextWindow: toPositiveNumber(entry.max_model_len, model.contextWindow),
 					};
 				},

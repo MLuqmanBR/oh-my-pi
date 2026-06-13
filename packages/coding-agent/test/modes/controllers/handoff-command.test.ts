@@ -59,7 +59,7 @@ describe("/handoff command", () => {
 			statusContainer,
 			chatContainer,
 			ui: { requestRender, requestComponentRender: vi.fn() },
-			editor: { onEscape: undefined },
+			editor: { onEscape: originalOnEscape },
 			rebuildChatFromMessages: vi.fn(),
 			statusLine: { invalidate: vi.fn() },
 			updateEditorTopBorder: vi.fn(),
@@ -83,5 +83,7 @@ describe("/handoff command", () => {
 		await commandPromise;
 
 		expect(statusContainer.children).toHaveLength(0);
+		expect(ctx.editor.onEscape).toBe(originalOnEscape);
+		expect(ctx.session.handoff).toHaveBeenCalledWith("focus on tests");
 	});
 });

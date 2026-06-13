@@ -12,7 +12,6 @@ import {
 	aimlApiModelManagerOptions,
 	alibabaCodingPlanModelManagerOptions,
 	anthropicModelManagerOptions,
-	apiGatewayModelManagerOptions,
 	cerebrasModelManagerOptions,
 	cloudflareAiGatewayModelManagerOptions,
 	deepseekModelManagerOptions,
@@ -30,7 +29,6 @@ import {
 	nanoGptModelManagerOptions,
 	nvidiaModelManagerOptions,
 	ollamaModelManagerOptions,
-	omnirouteModelManagerOptions,
 	openaiModelManagerOptions,
 	opencodeGoModelManagerOptions,
 	opencodeZenModelManagerOptions,
@@ -53,18 +51,6 @@ import {
 import { cursorModelManagerOptions, zaiModelManagerOptions } from "./special";
 
 export const CATALOG_PROVIDERS = [
-	{
-		id: "api-gateway",
-		defaultModel: "auto",
-		envVars: ["API_GATEWAY_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => apiGatewayModelManagerOptions(config),
-	},
-	{
-		id: "omniroute",
-		defaultModel: "auto",
-		envVars: ["OMNIROUTE_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => omnirouteModelManagerOptions(config),
-	},
 	{
 		id: "aimlapi",
 		defaultModel: "gpt-4o",

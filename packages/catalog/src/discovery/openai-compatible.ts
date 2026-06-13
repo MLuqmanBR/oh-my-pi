@@ -103,32 +103,6 @@ export interface FetchOpenAICompatibleModelsOptions<TApi extends Api> {
  * Returns `null` on transport/protocol failures.
  * Returns `[]` only when the endpoint responds successfully with no usable models.
  */
-const UNK_CONTEXT_WINDOW_LOCAL = 222_222;
-
-/**
- * Extract context window from an OpenAI-compatible API entry, trying common
- * field names in order of specificity. Returns 222222 only when
- * no value is present — the sentinel is then rejected by preferDiscoveryLimit
- * during merge, so real reference data wins.
- */
-function extractApiContextWindow(entry: OpenAICompatibleModelRecord): number {
-	const raw = entry.context_length ?? entry.context_window ?? entry.max_context_length ?? entry.max_input_tokens;
-	if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-		return raw;
-	}
-	return UNK_CONTEXT_WINDOW_LOCAL;
-}
-
-/**
- * Extract max output tokens from an OpenAI-compatible API entry.
- */
-function extractApiMaxTokens(entry: OpenAICompatibleModelRecord): number {
-	const raw = entry.max_output_tokens ?? entry.max_tokens ?? entry.max_completion_tokens;
-	if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-		return raw;
-	}
-	return UNK_MAX_TOKENS;
-}
 export async function fetchOpenAICompatibleModels<TApi extends Api>(
 	options: FetchOpenAICompatibleModelsOptions<TApi>,
 ): Promise<ModelSpec<TApi>[] | null> {
