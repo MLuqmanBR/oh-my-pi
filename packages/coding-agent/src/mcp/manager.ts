@@ -775,12 +775,17 @@ export class MCPManager {
 			this.#reconnectHistory.delete(name);
 		}
 
-		const pending = this.#pendingReconnections.get(name);
-		if (pending) return pending;
-
+		// Record the crash BEFORE checking for an in-flight reconnect. Every
+		// `onClose` fire must feed the breaker, even when `#doReconnect` is
+		// still in its backoff loop. Without this, a fast-crashing server
+		// re-enters `reconnectServer`, finds `#pendingReconnections`, and
+		// returns the same inflight promise forever — the breaker never opens.
 		if (this.#tripReconnectBreaker(name)) {
 			return null;
 		}
+
+		const pending = this.#pendingReconnections.get(name);
+		if (pending) return pending;
 
 		const attempt = this.#doReconnect(name);
 		this.#pendingReconnections.set(name, attempt);
@@ -820,8 +825,14 @@ export class MCPManager {
 				void stale.transport.close().catch(() => {});
 				this.#connections.delete(name);
 			}
+			// Clear the in-flight reconnect so `getConnectionStatus()` flips
+			// to "disconnected" — otherwise it reports "connecting" as long
+			// as `#doReconnect` is in its backoff loop. The pending promise
+			// resolves on its own; the next call through `reconnectServer`
+			// hits `#tripReconnectBreaker` → `return null` immediately.
 			this.#pendingConnections.delete(name);
 			this.#pendingToolLoads.delete(name);
+			this.#pendingReconnections.delete(name);
 			return true;
 		}
 		return false;
@@ -847,9 +858,6 @@ export class MCPManager {
 			void oldConnection.transport.close().catch(() => {});
 			this.#connections.delete(name);
 		}
-		this.#pendingConnections.delete(name);
-		this.#pendingToolLoads.delete(name);
-
 		// Retry with backoff — the server may still be starting up.
 		const delays = [500, 1000, 2000, 4000];
 		for (let attempt = 0; attempt <= delays.length; attempt++) {
@@ -859,6 +867,13 @@ export class MCPManager {
 					storedEpoch: reconnectEpoch,
 					currentEpoch: this.#epoch,
 				});
+				return null;
+			}
+			// Bail if the crash breaker opened while we were sleeping between
+			// retries.  Without this guard, a successful reconnect re-wires
+			// `onClose` and restarts the storm.
+			if ((this.#reconnectHistory.get(name)?.length ?? 0) > RECONNECT_BURST_LIMIT) {
+				logger.error("MCP reconnect aborted: circuit breaker open", { path: `mcp:${name}` });
 				return null;
 			}
 			try {
