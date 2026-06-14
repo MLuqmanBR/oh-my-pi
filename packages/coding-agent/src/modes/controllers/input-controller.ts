@@ -1,13 +1,15 @@
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { type AutocompleteProvider, matchesKey, type SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, isEnoent, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { isSettingsInitialized, settings } from "../../config/settings";
+import { resolveLocalRoot } from "../../internal-urls";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
 import { renderSegmentTrack } from "../../modes/components/segment-track";
 import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-title-download-progress";
 import { expandEmoticons } from "../../modes/emoji-autocomplete";
-import { materializeImageReferenceLinks } from "../../modes/image-references";
+import { materializeImageReferenceLinks, shiftImageMarkers } from "../../modes/image-references";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
 import type { InteractiveModeContext } from "../../modes/types";
 import manualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
@@ -42,12 +44,44 @@ function hasPasteText(value: unknown): value is PasteTarget {
 	return typeof value === "object" && value !== null && typeof (value as PasteTarget).pasteText === "function";
 }
 
+/** Wrap pasted text in a fenced code block, using a backtick fence longer than any run of
+ *  backticks already in the content so an embedded fence cannot terminate the block early. */
+function wrapPasteInCodeBlock(content: string): string {
+	let longestRun = 0;
+	let run = 0;
+	for (let i = 0; i < content.length; i++) {
+		if (content.charCodeAt(i) === 96 /* backtick */) {
+			run++;
+			if (run > longestRun) longestRun = run;
+		} else {
+			run = 0;
+		}
+	}
+	const fence = "`".repeat(Math.max(3, longestRun + 1));
+	return `${fence}\n${content}\n${fence}`;
+}
+
+/** Wrap pasted text in `<pasted_text>` tags so the model treats it as one quoted block. */
+function wrapPasteInXml(content: string): string {
+	return `<pasted_text>\n${content}\n</pasted_text>`;
+}
+
 const TINY_TITLE_PROGRESS_DONE_TTL_MS = 3_000;
 // A cached model fires its file-load events in a short burst and then goes silent
 // while onnxruntime builds the session; a genuine download keeps streaming progress
 // events for seconds. Only reveal the bar once a still-incomplete event arrives after
 // this grace window, so an already-downloaded model never flashes the bar.
 const TINY_TITLE_PROGRESS_REVEAL_DELAY_MS = 1_000;
+// Double-tap ← on an empty editor opens the Agent Hub (and, in a focused
+// subagent view, ←← returns to the main session). The second tap must land
+// inside this window. The lower bound rejects terminal-synthesized arrow-key
+// bursts: "click to move cursor" / pointer features in iTerm2, WezTerm, kitty,
+// and tmux emit several arrow keys in a single stdin read (sub-millisecond
+// apart) on a stray click, which used to pop the hub with no key ever pressed.
+// Three or more rapid taps are likewise treated as a burst, not a gesture. A
+// deliberate human double-tap is always tens of milliseconds apart.
+const LEFT_DOUBLE_TAP_MIN_GAP_MS = 40;
+const LEFT_DOUBLE_TAP_MAX_GAP_MS = 500;
 
 export class InputController {
 	constructor(
@@ -61,6 +95,13 @@ export class InputController {
 
 	#enhancedPaste?: EnhancedPasteController;
 	#focusedLeftTapListenerInstalled = false;
+	// Tap counter for the double-← gesture; reset whenever a quiet gap
+	// (>= LEFT_DOUBLE_TAP_MAX_GAP_MS) starts a fresh sequence. See
+	// #detectLeftDoubleTap.
+	#leftTapCount = 0;
+	// Sequential index for `local://attachment-N` references created by the large-paste "attach as
+	// file" action. Seeded from 0 and bumped past any existing attachment files in #attachPasteAsFile.
+	#attachmentCounter = 0;
 
 	#showTinyTitleDownloadProgress(modelKey: string): void {
 		if (!isTinyTitleLocalModelKey(modelKey)) return;
@@ -270,6 +311,7 @@ export class InputController {
 			this.ctx.keybindings.getKeys("app.clipboard.pasteTextRaw"),
 		);
 		this.ctx.editor.onPasteTextRaw = () => void this.handleClipboardTextRawPaste();
+		this.ctx.editor.onLargePaste = (text, lineCount) => this.handleLargePaste(text, lineCount);
 		this.ctx.editor.setActionKeys(
 			"app.clipboard.copyPrompt",
 			this.ctx.keybindings.getKeys("app.clipboard.copyPrompt"),
@@ -318,18 +360,16 @@ export class InputController {
 
 		// Double-tap left arrow on an empty editor: opens the agent hub from the
 		// main session, or returns the focused subagent view to the main session.
-		// Focused ←← intentionally matches Esc.
+		// Focused ←← intentionally matches Esc. From the main session the gesture
+		// stays inert when there are no subagents (requireContent); the explicit
+		// hub key still opens the empty roster.
 		this.ctx.editor.onLeftAtStart = () => {
 			if (this.ctx.focusedAgentId) {
 				this.#handleFocusedLeftTap();
 				return;
 			}
-			const now = Date.now();
-			if (now - this.ctx.lastLeftTapTime < 500) {
-				this.ctx.lastLeftTapTime = 0;
-				this.ctx.showAgentHub();
-			} else {
-				this.ctx.lastLeftTapTime = now;
+			if (this.#detectLeftDoubleTap()) {
+				this.ctx.showAgentHub({ requireContent: true });
 			}
 		};
 
@@ -348,13 +388,37 @@ export class InputController {
 	}
 
 	#handleFocusedLeftTap(): void {
-		const now = Date.now();
-		if (now - this.ctx.lastLeftTapTime < 500) {
-			this.ctx.lastLeftTapTime = 0;
+		if (this.#detectLeftDoubleTap()) {
 			void this.ctx.unfocusSession();
-		} else {
-			this.ctx.lastLeftTapTime = now;
 		}
+	}
+
+	/**
+	 * Detect a deliberate double-← gesture, rejecting terminal-synthesized arrow
+	 * bursts. Returns true only on the *second* tap of a fresh sequence when it
+	 * lands a human-plausible interval after the first
+	 * (`[LEFT_DOUBLE_TAP_MIN_GAP_MS, LEFT_DOUBLE_TAP_MAX_GAP_MS)`). Taps closer
+	 * than the lower bound, or any third-and-later tap before a quiet gap, are a
+	 * burst and never fire — so a stray click that makes the terminal emit a run
+	 * of ← keys can no longer pop the Agent Hub.
+	 */
+	#detectLeftDoubleTap(): boolean {
+		const now = Date.now();
+		const sinceLast = now - this.ctx.lastLeftTapTime;
+		this.ctx.lastLeftTapTime = now;
+		if (sinceLast >= LEFT_DOUBLE_TAP_MAX_GAP_MS) {
+			// Quiet gap: this tap starts a fresh sequence.
+			this.#leftTapCount = 1;
+			return false;
+		}
+		this.#leftTapCount += 1;
+		if (this.#leftTapCount === 2 && sinceLast >= LEFT_DOUBLE_TAP_MIN_GAP_MS) {
+			// Exactly two taps, the second a human-plausible interval after the first.
+			this.#leftTapCount = 0;
+			this.ctx.lastLeftTapTime = 0;
+			return true;
+		}
+		return false;
 	}
 
 	#setupEnhancedPaste(): void {
@@ -924,7 +988,20 @@ export class InputController {
 	restoreQueuedMessagesToEditor(options?: { abort?: boolean; currentText?: string }): number {
 		this.ctx.locallySubmittedUserSignatures.clear();
 		const { steering, followUp } = this.ctx.session.clearQueue();
-		const allQueued = [...steering, ...followUp];
+		// Messages typed while compacting live in `compactionQueuedMessages`, not the
+		// agent queue `clearQueue()` drains — but the pending bar shows the same
+		// "Alt+Up to edit" hint for them (ui-helpers `updatePendingMessagesDisplay`).
+		// Drain them here too so the dequeue restores every message the hint
+		// advertises; otherwise a skill/text queued during compaction is stranded and
+		// Alt+Up reports "No queued messages to restore".
+		const compactionQueued = this.ctx.compactionQueuedMessages;
+		this.ctx.compactionQueuedMessages = [];
+		const allQueued = [
+			...steering,
+			...compactionQueued.filter(e => e.mode === "steer").map(e => ({ text: e.text, images: e.images })),
+			...followUp,
+			...compactionQueued.filter(e => e.mode === "followUp").map(e => ({ text: e.text, images: e.images })),
+		];
 		if (allQueued.length === 0) {
 			this.ctx.updatePendingMessagesDisplay();
 			if (options?.abort) {
@@ -932,14 +1009,34 @@ export class InputController {
 			}
 			return 0;
 		}
-		const queuedText = allQueued.map(e => e.text).join("\n\n");
+		// Image markers are positional: `[Image #N]` ↔ `pendingImages[N-1]`. Each
+		// queued message numbered its markers against its own local image list
+		// (1..K). Because we prepend the queued text but append the queued images
+		// to `pendingImages`, any existing draft images (M of them) — plus images
+		// already pulled in by earlier queued messages — shift the slot index that
+		// every marker must point to. Bumping each message's markers by the
+		// running offset keeps the merged text aligned with the merged
+		// `pendingImages` order; draft markers stay valid because draft images
+		// keep their original positions.
+		const queuedImages = allQueued.flatMap(e => e.images ?? []);
+		let queuedText: string;
+		if (queuedImages.length > 0) {
+			const parts: string[] = [];
+			let imageOffset = this.ctx.pendingImages.length;
+			for (const entry of allQueued) {
+				parts.push(shiftImageMarkers(entry.text, imageOffset));
+				if (entry.images && entry.images.length > 0) imageOffset += entry.images.length;
+			}
+			queuedText = parts.join("\n\n");
+		} else {
+			queuedText = allQueued.map(e => e.text).join("\n\n");
+		}
 		const currentText = options?.currentText ?? this.ctx.editor.getText();
 		const combinedText = [queuedText, currentText].filter(t => t.trim()).join("\n\n");
 		this.ctx.editor.setText(combinedText);
 		// Hand queued images back to the pending-image buffer (links are
 		// re-materialized lazily; the restored text already carries the
-		// `[Image #N, WxH]` markers).
-		const queuedImages = allQueued.flatMap(e => e.images ?? []);
+		// renumbered `[Image #N, WxH]` markers).
 		if (queuedImages.length > 0) {
 			this.ctx.pendingImages.push(...queuedImages);
 			this.ctx.pendingImageLinks.push(...queuedImages.map(() => undefined));
@@ -1119,6 +1216,97 @@ export class InputController {
 		}
 	}
 
+	/**
+	 * Editor `onLargePaste` hook: gate a marker-sized paste behind the large-paste menu. Returns
+	 * `true` to intercept (the editor skips its default `[Paste]` marker) once the paste reaches the
+	 * configured `paste.largeMenuThreshold` line count; otherwise `false` for default collapse-to-marker
+	 * behavior. The async menu is fired and forgotten — the editor only needs the synchronous verdict.
+	 */
+	handleLargePaste(text: string, lineCount: number): boolean {
+		const threshold = this.ctx.settings.get("paste.largeMenuThreshold");
+		if (!(threshold > 0) || lineCount < threshold) return false;
+		void this.presentLargePasteMenu(text, lineCount);
+		return true;
+	}
+
+	/**
+	 * Present the large-paste menu and apply the chosen action: wrap in a code block or in XML tags
+	 * (both collapse to a `[Paste]` marker that expands on submit), or save the text to a file and
+	 * reference its path so the agent can `read` it on demand. Cancelling (Esc) falls back to the
+	 * default inline paste marker, so the pasted content is never lost.
+	 */
+	async presentLargePasteMenu(text: string, lineCount: number): Promise<void> {
+		const CODE_BLOCK = "Wrap in a code block";
+		const XML = "Wrap in XML tags";
+		const FILE = "Attach as a file";
+
+		let choice: string | undefined;
+		try {
+			choice = await this.ctx.showHookSelector(
+				`Pasted ${lineCount} lines`,
+				[
+					{ label: CODE_BLOCK, description: "Fence the text in a ``` block, collapsed to a marker" },
+					{ label: XML, description: "Wrap the text in <pasted_text> tags, collapsed to a marker" },
+					{ label: FILE, description: "Save the text to a file and reference its path" },
+				],
+				{ helpText: "Esc to paste inline" },
+			);
+		} catch (error) {
+			logger.warn("large-paste menu failed", { error: error instanceof Error ? error.message : String(error) });
+			choice = undefined;
+		}
+
+		switch (choice) {
+			case CODE_BLOCK:
+				this.ctx.editor.insertPaste(wrapPasteInCodeBlock(text));
+				break;
+			case XML:
+				this.ctx.editor.insertPaste(wrapPasteInXml(text));
+				break;
+			case FILE:
+				await this.#attachPasteAsFile(text, lineCount);
+				break;
+			default:
+				// Esc / cancel: keep the original behavior — collapse to an inline paste marker.
+				this.ctx.editor.insertPaste(text);
+				break;
+		}
+		this.ctx.ui.requestRender();
+	}
+
+	/**
+	 * Save a large paste to the session's `local://` store and insert a clean `local://attachment-N`
+	 * reference into the editor so the agent can `read` it on demand — instead of inlining the text or
+	 * leaking a raw temp path. Falls back to an inline paste marker when the write fails, so the
+	 * content is never lost.
+	 */
+	async #attachPasteAsFile(text: string, lineCount: number): Promise<void> {
+		try {
+			// Mirror the exact mapping the read tool's local:// resolver uses so a later
+			// `read local://attachment-N` lands on the file written here.
+			const localRoot = resolveLocalRoot({
+				getArtifactsDir: () => this.ctx.sessionManager.getArtifactsDir(),
+				getSessionId: () => this.ctx.sessionManager.getSessionId(),
+			});
+			let name: string;
+			let filePath: string;
+			do {
+				this.#attachmentCounter++;
+				name = `attachment-${this.#attachmentCounter}`;
+				filePath = path.join(localRoot, name);
+			} while (await Bun.file(filePath).exists());
+			await Bun.write(filePath, text);
+			this.ctx.editor.insertText(`local://${name} `);
+			this.ctx.showStatus(`Saved ${lineCount} pasted lines to local://${name}`);
+		} catch (error) {
+			logger.warn("failed to save large paste to file", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			this.ctx.editor.insertPaste(text);
+			this.ctx.showError("Failed to save paste to a file — pasted inline instead");
+		}
+	}
+
 	createAutocompleteProvider(commands: SlashCommand[], basePath: string): AutocompleteProvider {
 		return createPromptActionAutocompleteProvider({
 			commands,
@@ -1200,12 +1388,14 @@ export class InputController {
 			this.ctx.updateEditorBorderColor();
 			// The status line already reports the resolved model + thinking level, so
 			// the cycle status is just a status-line-style chip track (active role
-			// filled), matching the plan-approval model slider.
+			// filled), matching the plan-approval model slider. It renders into its
+			// own anchored container above the editor (cleared+rebuilt each cycle),
+			// so it updates in place instead of stacking duplicates in the scrollback.
 			const track = renderSegmentTrack(
 				cycleOrder.map(role => ({ label: role })),
 				cycleOrder.indexOf(result.role),
 			);
-			this.ctx.showStatus(track, { dim: false });
+			this.ctx.showModelCycleTrack(track);
 		} catch (error) {
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 		}

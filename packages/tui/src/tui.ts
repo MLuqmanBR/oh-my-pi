@@ -16,6 +16,7 @@ import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./components/image";
 import { planDeccaraFills } from "./deccara";
 import { isKeyRelease, matchesKey } from "./keys";
+import { LoopWatchdog } from "./loop-watchdog";
 import { isConPTYHosted, setAltScreenActive, type Terminal } from "./terminal";
 import {
 	encodeKittyDeleteImage,
@@ -80,6 +81,8 @@ const CURSOR_END_NO_SYNC = "";
 // coordinates so columns/rows past 223 are reported.
 const MOUSE_TRACKING_ON = "\x1b[?1000h\x1b[?1003h\x1b[?1006h";
 const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1003l\x1b[?1000l";
+const ALT_SCREEN_ENTER = "\x1b[?1049h";
+const ALT_SCREEN_EXIT = "\x1b[?1049l";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
@@ -348,7 +351,13 @@ function parseSizeValue(value: SizeValue | undefined, referenceSize: number): nu
 
 /** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */
 function isMultiplexerSession(): boolean {
-	return Boolean(Bun.env.TMUX || Bun.env.STY || Bun.env.ZELLIJ);
+	// TMUX/STY/ZELLIJ are the authoritative signals, but they can be stripped while
+	// TERM survives (`sudo` without -E, `su`, env-sanitizing launchers/ssh). Fall back to
+	// the TERM prefix like every sibling multiplexer check (terminal-capabilities.ts) so a
+	// resize never emits ED3 into a tmux/screen pane and wipes its scrollback history.
+	if (Bun.env.TMUX || Bun.env.STY || Bun.env.ZELLIJ) return true;
+	const term = Bun.env.TERM?.toLowerCase() ?? "";
+	return term.startsWith("tmux") || term.startsWith("screen");
 }
 
 /**
@@ -775,7 +784,16 @@ export class TUI extends Container {
 	// `#fullRedrawCount`: these never enter native scrollback and exist only for
 	// the lifetime of the drag. Exposed for tests/diagnostics.
 	#resizeViewportPaintCount = 0;
+	// During a live resize drag the terminal's normal buffer may reflow full-width
+	// rows before our repaint lands. Borrow the alternate screen for throwaway
+	// resize frames so width changes truncate the transient viewport instead of
+	// pushing wrapped fragments into native scrollback.
+	#resizeAltActive = false;
 	#stopped = false;
+	// Always-on event-loop lag probe. The high default threshold keeps it quiet;
+	// it only logs `ui.loop-blocked` (with the current loop phase) when a frame
+	// budget is genuinely starved. Armed in start(), disarmed in stop().
+	#watchdog: LoopWatchdog;
 
 	// Transient alternate-screen state for a fullscreen overlay. While active, the
 	// engine paints only the modal on the alt buffer and leaves every
@@ -840,6 +858,7 @@ export class TUI extends Container {
 		this.terminal = terminal;
 		this.#renderScheduler = options?.renderScheduler ?? DEFAULT_RENDER_SCHEDULER;
 		this.#showHardwareCursor = showHardwareCursor === undefined ? this.#showHardwareCursor : showHardwareCursor;
+		this.#watchdog = new LoopWatchdog();
 	}
 
 	override render(width: number): readonly string[] {
@@ -1186,6 +1205,7 @@ export class TUI extends Container {
 
 	start(options?: TUIStartOptions): void {
 		this.#stopped = false;
+		this.#watchdog.start();
 		this.#ghosttyInitialImageDelayDone = false;
 		this.#ghosttyImageReadyAtMs = this.#renderScheduler.now() + TUI.#GHOSTTY_INITIAL_IMAGE_DELAY_MS;
 		// A DECRQM report for mode 2026 is authoritative: enable synchronized
@@ -1414,6 +1434,9 @@ export class TUI extends Container {
 	stop(): void {
 		// Leave the alt buffer first so the teardown cursor math below runs against
 		// the restored normal screen (which #previousLines still describes).
+		if (this.#resizeAltActive) {
+			this.terminal.write(this.#leaveResizeAltSequence());
+		}
 		if (this.#altActive) {
 			const kittyPop = this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
 			this.terminal.write(`${MOUSE_TRACKING_OFF}${kittyPop}\x1b[?1049l`);
@@ -1428,6 +1451,7 @@ export class TUI extends Container {
 		}
 		this.#clearSixelProbeState();
 		this.#stopped = true;
+		this.#watchdog.stop();
 		if (this.#renderTimer) {
 			this.#renderTimer.cancel();
 			this.#renderTimer = undefined;
@@ -1881,7 +1905,7 @@ export class TUI extends Container {
 		overlayHeight: number,
 		termWidth: number,
 		termHeight: number,
-	): { width: number; row: number; col: number; maxHeight: number | undefined } {
+	): { width: number; row: number; col: number; maxHeight: number } {
 		const opt = options ?? {};
 
 		// Parse margin (clamp to non-negative)
@@ -1908,14 +1932,12 @@ export class TUI extends Container {
 		width = Math.max(1, Math.min(width, availWidth));
 
 		// === Resolve maxHeight ===
-		let maxHeight = parseSizeValue(opt.maxHeight, termHeight);
-		// Clamp to available space
-		if (maxHeight !== undefined) {
-			maxHeight = Math.max(1, Math.min(maxHeight, availHeight));
-		}
+		let maxHeight = parseSizeValue(opt.maxHeight, termHeight) ?? availHeight;
+		maxHeight = Math.max(1, Math.min(maxHeight, availHeight));
 
-		// Effective overlay height (may be clamped by maxHeight)
-		const effectiveHeight = maxHeight !== undefined ? Math.min(overlayHeight, maxHeight) : overlayHeight;
+		// Effective overlay height: maxHeight is always resolved (defaults to
+		// availHeight above), so the overlay is unconditionally clamped to fit.
+		const effectiveHeight = Math.min(overlayHeight, maxHeight);
 
 		// === Resolve position ===
 		let row: number;
@@ -2026,7 +2048,7 @@ export class TUI extends Container {
 			// (width and maxHeight don't depend on overlay height).
 			const { width, maxHeight } = this.#resolveOverlayLayout(options, 0, termWidth, termHeight);
 			let overlayLines = component.render(width);
-			if (maxHeight !== undefined && overlayLines.length > maxHeight) {
+			if (overlayLines.length > maxHeight) {
 				overlayLines = overlayLines.slice(0, maxHeight);
 			}
 			const { row, col } = this.#resolveOverlayLayout(options, overlayLines.length, termWidth, termHeight);
@@ -2738,7 +2760,7 @@ export class TUI extends Container {
 	): void {
 		this.#fullRedrawCount += 1;
 		const { chunkTo, windowTop } = options;
-		let buffer = this.#paintBeginSequence + purgeSequence;
+		let buffer = this.#paintBeginSequence + this.#leaveResizeAltSequence() + purgeSequence;
 		if (options.clearScrollback) {
 			buffer += "\x1b[2J\x1b[H\x1b[3J";
 		} else {
@@ -2812,15 +2834,10 @@ export class TUI extends Container {
 	#requestResizeViewportPaint(): void {
 		if (this.#stopped) return;
 		this.#resizeViewportPaintPending = true;
-		if (this.#renderRequested) return;
-		this.#renderRequested = true;
-		this.#renderScheduler.scheduleImmediate(() => {
-			if (this.#stopped || !this.#renderRequested) return;
-			this.#renderRequested = false;
-			this.#lastRenderAt = this.#renderScheduler.now();
-			this.#doRender();
-			if (this.#renderRequested) this.#scheduleRender();
-		});
+		this.#renderRequested = false;
+		this.#lastRenderAt = this.#renderScheduler.now();
+		this.#doRender();
+		if (this.#renderRequested) this.#scheduleRender();
 	}
 
 	/**
@@ -2842,7 +2859,7 @@ export class TUI extends Container {
 		// authoritative accounting, and its beginPass() wipes these frames.
 		this.#imageBudget.beginPass(true);
 		const { window, contentRows } = this.#composeResizeViewport(width, height);
-		this.#emitResizeViewport(window, height, contentRows);
+		this.#emitResizeViewport(window, height, contentRows, width);
 		this.#resizeViewportPaintCount += 1;
 	}
 
@@ -2880,24 +2897,43 @@ export class TUI extends Container {
 		return { window: this.#prepareLinesArray(window, width), contentRows: count };
 	}
 
+	/** Enter or leave the alternate screen borrowed for transient resize frames. */
+	#enterResizeAltSequence(): string {
+		if (this.#resizeAltActive || this.#altActive) return "";
+		this.#resizeAltActive = true;
+		setAltScreenActive(true);
+		this.#forgetHardwareCursorState();
+		this.#recordHardwareCursorHidden();
+		return `${ALT_SCREEN_ENTER}${this.terminal.kittyEnableSequence ?? ""}`;
+	}
+
+	#leaveResizeAltSequence(): string {
+		if (!this.#resizeAltActive) return "";
+		const kittyPop = this.terminal.kittyEnableSequence ? "\x1b[<u" : "";
+		this.#resizeAltActive = false;
+		setAltScreenActive(false);
+		this.#forgetHardwareCursorState();
+		return `${kittyPop}${ALT_SCREEN_EXIT}`;
+	}
+
 	/**
-	 * Emit a throwaway viewport repaint for the resize fast path: erase the
-	 * visible screen (ED2 — never ED3, so native scrollback survives the drag)
-	 * and write the prepared window from home with the cursor held hidden. No
-	 * scrollback push, no committed-prefix write, no `#commit` — none of the
-	 * paint accounting is advanced.
+	 * Emit a throwaway viewport repaint for the resize fast path as an alternate-
+	 * screen per-row overwrite. The normal buffer may reflow full-width rows on a
+	 * width change before the app can repaint; keeping the drag on the alternate
+	 * screen makes those transient resizes truncate instead of pushing wrapped
+	 * fragments into native scrollback. Normal-screen history is rebuilt once at
+	 * settle via `#emitFullPaint`.
 	 */
-	#emitResizeViewport(window: readonly string[], height: number, contentRows: number): void {
-		let buffer = `${this.#paintBeginSequence}\x1b[2J\x1b[H`;
+	#emitResizeViewport(window: readonly string[], height: number, contentRows: number, width: number): void {
+		let buffer = `${this.#paintBeginSequence + this.#enterResizeAltSequence()}\x1b[H`;
 		for (let r = 0; r < height; r++) {
 			if (r > 0) buffer += "\r\n";
-			buffer += this.#terminalLine(window[r] ?? "");
+			buffer += this.#lineRewriteSequence(window[r] ?? "", width);
 		}
 		// Park the hardware cursor at the real content bottom, not the padded
-		// viewport bottom: a subsequent height shrink (the next drag step) would
-		// otherwise scroll the live rows below the cursor into native scrollback
-		// and duplicate them — one stray copy per resize event — until the settle
-		// rebuild erases it. Mirrors the authoritative paint's park (#doFullPaint).
+		// viewport bottom: a later height shrink would otherwise scroll the live
+		// rows below the cursor into native scrollback and duplicate them until
+		// the settle rebuild erases it.
 		const parkUp = height - Math.max(1, contentRows);
 		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
 		buffer += this.#paintEndSequence;

@@ -998,6 +998,32 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	fastModeScope: {
+		type: "enum",
+		values: ["both", "openai", "claude"] as const,
+		default: "both",
+		ui: {
+			tab: "model",
+			group: "Sampling",
+			label: "Fast Mode Scope",
+			description:
+				'Which providers `/fast on` (and the fast-mode toggle) target. "both" = priority on every supported provider; "openai"/"claude" scope it to one family (mirrors serviceTier openai-only/claude-only).',
+			options: [
+				{ value: "both", label: "Both", description: "Priority on every supported provider" },
+				{
+					value: "openai",
+					label: "OpenAI only",
+					description: "Priority on OpenAI/OpenAI-Codex requests; ignored elsewhere",
+				},
+				{
+					value: "claude",
+					label: "Claude only",
+					description: "Anthropic fast mode on direct Claude requests; ignored elsewhere",
+				},
+			],
+		},
+	},
+
 	// Retries
 	"retry.enabled": { type: "boolean", default: true },
 
@@ -1180,6 +1206,25 @@ export const SETTINGS_SCHEMA = {
 			group: "Input",
 			label: "Emoji Autocomplete",
 			description: "Suggest emojis from `:name:` shortcodes and expand text emoticons like `:D` or `:-)`",
+		},
+	},
+
+	"paste.largeMenuThreshold": {
+		type: "number",
+		default: 100,
+		ui: {
+			tab: "interaction",
+			group: "Input",
+			label: "Large Paste Menu",
+			description:
+				"When a paste reaches this many lines, offer a menu to wrap it in a code block, wrap it in XML tags, or save it to a file. 0 disables the menu (large pastes still collapse to a [Paste] marker).",
+			options: [
+				{ value: "0", label: "Off" },
+				{ value: "100", label: "100 lines" },
+				{ value: "250", label: "250 lines" },
+				{ value: "500", label: "500 lines" },
+				{ value: "1000", label: "1000 lines" },
+			],
 		},
 	},
 
@@ -1745,6 +1790,18 @@ export const SETTINGS_SCHEMA = {
 					description: "8x13 glyphs on an 8x16 cell (extra leading), black ink.",
 				},
 				{
+					value: "8on22-bw",
+					label: "8x13 on 22px pitch (leading), black",
+					description:
+						"8x13 glyphs on an 8x22 cell — extra line spacing so rows don't crowd. Default for OpenAI/Google.",
+				},
+				{
+					value: "11on16-bw",
+					label: "8x13 on 11px advance (tracking), black",
+					description:
+						"8x13 glyphs on an 11x16 cell — extra letter spacing so characters don't merge. Default for Anthropic.",
+				},
+				{
 					value: "doc-8on16-bw",
 					label: "Doc 8on16, black",
 					description: "Two word-wrapped newspaper columns of 8x13 glyphs on a 16px pitch, black ink.",
@@ -1894,6 +1951,31 @@ export const SETTINGS_SCHEMA = {
 			condition: "mnemopiActive",
 		},
 	},
+	"mnemopi.embeddingVariant": {
+		type: "enum",
+		values: ["en", "multilingual"] as const,
+		default: "en",
+		ui: {
+			tab: "memory",
+			group: "Mnemopi",
+			label: "Embedding variant",
+			description:
+				"Local embedding model family. en = stronger English model; multilingual = cross-language model. Changing this rebuilds existing memory embeddings on next start.",
+			options: [
+				{
+					value: "en",
+					label: "English (bge-base-en-v1.5)",
+					description: "BAAI/bge-base-en-v1.5 (768d), English-only",
+				},
+				{
+					value: "multilingual",
+					label: "Multilingual (multilingual-e5-large)",
+					description: "intfloat/multilingual-e5-large (1024d), cross-language recall",
+				},
+			],
+			condition: "mnemopiActive",
+		},
+	},
 	"mnemopi.autoRecall": {
 		type: "boolean",
 		default: true,
@@ -1956,7 +2038,8 @@ export const SETTINGS_SCHEMA = {
 			tab: "memory",
 			group: "Mnemopi",
 			label: "Mnemopi Embedding Model",
-			description: "Optional embedding model override passed to Mnemopi",
+			description:
+				"Advanced: explicit embedding model id that overrides the variant. Leave empty to use mnemopi.embeddingVariant.",
 			condition: "mnemopiActive",
 		},
 	},
@@ -3098,19 +3181,21 @@ export const SETTINGS_SCHEMA = {
 
 	"async.pollWaitDuration": {
 		type: "enum",
-		values: ["5s", "10s", "30s", "1m", "5m"] as const,
-		default: "30s",
+		values: ["5s", "10s", "30s", "1m", "5m", "smart"] as const,
+		default: "smart",
 		ui: {
 			tab: "tools",
 			group: "Execution",
-			label: "Poll Wait Duration",
-			description: "How long the poll tool waits for background job updates before returning the current state",
+			label: "Max Poll Time",
+			description:
+				"How long the poll tool waits for background job updates before returning the current state. A fixed value waits that exact duration every time. `smart` adapts: it starts at 5s and lengthens with each back-to-back poll (up to 5m), then resets to 5s after about a minute without polling.",
 			options: [
 				{ value: "5s", label: "5 seconds" },
 				{ value: "10s", label: "10 seconds" },
-				{ value: "30s", label: "30 seconds", description: "Default" },
+				{ value: "30s", label: "30 seconds" },
 				{ value: "1m", label: "1 minute" },
 				{ value: "5m", label: "5 minutes" },
+				{ value: "smart", label: "Smart", description: "Default — adaptive 5s→5m, resets when you stop polling" },
 			],
 		},
 	},

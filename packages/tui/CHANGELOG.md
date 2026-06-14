@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an always-on `LoopWatchdog` armed in `TUI.start()`/`TUI.stop()` that logs `ui.loop-blocked` (rising-edge deduped, with `blockedMs` and the phase active during the elapsed interval) when a self-scheduled probe tick runs late, plus a `ui.select-filter` breadcrumb around the `SelectList` fuzzy filter. The phase is read via `takeRecentLoopPhase`, so a synchronous block whose breadcrumb was pushed and popped before the delayed tick runs is still attributed to its phase instead of "unknown". `stop()` cancels the armed timer (via `clearTimeout` on the default handle) so repeated start/stop cycles leave no pending probe, with the generation guard as a fallback ([#2485](https://github.com/can1357/oh-my-pi/issues/2485))
+- Added `ctrl+j` as a second default binding for the `tui.input.newLine` action alongside `shift+enter`, so terminals that cannot emit `shift+enter` still have a newline key. On terminals with Kitty-protocol / `modifyOtherKeys` disambiguation `ctrl+j` inserts a newline while `Enter` still submits; on legacy terminals where `ctrl+j` and `Enter` are both byte-identical `LF` it submits (documented limitation). User keybinding overrides still take precedence ([#2473](https://github.com/can1357/oh-my-pi/issues/2473))
+- Added an `Editor.onLargePaste(text, lineCount)` hook, fired for a "marker-sized" paste (the point where the editor would otherwise collapse it into a `[Paste #N]` token). Returning `true` lets the host intercept the paste — e.g. to offer wrap-in-code-block / wrap-in-XML / attach-as-file choices — and suppresses the default marker (no undo state is recorded). Added `Editor.insertPaste(content)` so the host can re-insert a (possibly transformed) collapsed paste marker without re-triggering the hook.
+
+### Fixed
+
+- Fixed overlays without an explicit `maxHeight` dropping their bottom rows off-screen when taller than the terminal: `#resolveOverlayLayout` now defaults the height cap to the available rows, so a tall overlay is sliced to fit (and re-clamps on resize) instead of overflowing the visible region.
+- Fixed `Editor.#decorate` rejecting keyword matches glued to the cursor: `CURSOR_MARKER` begins with ESC (non-whitespace), so decorators with a right-boundary lookahead (e.g. `/(?<!\S)ultrathink(?!\S)/`) failed at the seam and dropped highlighting until a trailing character was typed. The decorate hook now splits around the marker and decorates each user-text segment in isolation so word-boundary lookarounds resolve correctly on both sides ([#2475](https://github.com/can1357/oh-my-pi/issues/2475)).
+- Fixed non-multiplexer resize drags with width changes briefly showing terminal-reflowed wrapped fragments: transient resize frames now borrow the alternate screen and return to the normal screen for the settled authoritative replay.
+- Fixed `isMultiplexerSession()` only checking the `TMUX`/`STY`/`ZELLIJ` env vars and missing the `TERM=tmux-*`/`screen-*` fallback every sibling detector uses. When the multiplexer env was stripped but `TERM` survived (`sudo` without `-E`, `su`, env-sanitizing launchers/ssh), the renderer misclassified the pane as a direct terminal and emitted ED3 (`CSI 3 J`) on resize/replace/`resetDisplay`, which wipes tmux pane history — scrollback only reappeared after a full rerender (Ctrl+L). The check now aligns with `shouldEnableSynchronizedOutputByDefault`, `detectRectangularSgrSupport`, and `getFallbackImageProtocol` in `terminal-capabilities.ts` ([#2544](https://github.com/can1357/oh-my-pi/issues/2544)).
+
 ## [15.12.6] - 2026-06-14
 
 ### Fixed
