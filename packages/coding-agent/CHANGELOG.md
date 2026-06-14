@@ -1,12 +1,33 @@
 # Changelog
 ## [Unreleased]
 
+## [15.12.6] - 2026-06-14
+### Breaking Changes
+
+- Removed the `writeLine` and `writeLineSync` methods from the public `SessionStorageWriter` contract, requiring custom `SessionStorage` backends to switch to the `append` API
+
+### Added
+
+- Added package-level exports for `SessionContext`, session entry types, session listing/loader helpers, and migration APIs via `session/session-context`, `session/session-entries`, `session/session-listing`, `session/session-loader`, and `session/session-migrations`
+- Added asynchronous session-write `append(...)`-based persistence API in session storage implementations so callers can stream writes without sync line-appending methods
+
+### Changed
+
+- Changed session persistence internals to expose `writeTextAtomic(...)` on session storage writers for atomic whole-file replacements
+- Changed online session-title generation to support tool-choice-less title models. Providers/models that cannot be forced to call a tool (chat-completions hosts without `tool_choice` support such as DeepSeek V4, and Claude Fable/Mythos) are now prompted to wrap the title in `<title>...</title>` markers instead of the `set_title` tool call; extraction is lenient, accepting a plain sentence or a truncated/unclosed tag. A `TITLE_SYSTEM.md` override is reused in this mode with the marker instruction appended.
+
 ### Fixed
 
 - Fixed Ollama, llama.cpp, and LM Studio always appearing in the models menu regardless of login state. These implicit local providers now require explicit login via `/login` (or an env var API key) before their models appear in the selector, matching every other provider's visibility contract. Discovery still occurs without credentials so models load once logged in.
 
 - Removed `Math.min` clamp on `maxTokens` in coding-agent discovery paths (`discoverOllamaModels`, `discoverLlamaCppModels`) that silently capped max output tokens to `DISCOVERY_DEFAULT_MAX_TOKENS` (32,768). The `normalizeDiscoverableModels` env-var override path no longer clamps `maxTokens` to `Math.min(contextLength, 32768)`. Removed unused `DISCOVERY_DEFAULT_MAX_TOKENS` import from model-registry.
 - Fixed session JSONL persistence so the first assistant turn materializes the file synchronously, leaves the append writer open, and writes later entries with a sync append writer even during writer-close races instead of waiting on a queued rewrite.
+- Fixed submitted user messages emitting OSC 133 command-start markers without a matching command-finished marker, which made some terminals group later transcript output under the first prompt instead of appending it normally.
+- Fixed queued forced tool choices being rejected and requeued or dropped when their named tool is no longer active for the upcoming turn, preventing eager todo and pending-action reminders from forcing unavailable tools. ([#1701](https://github.com/can1357/oh-my-pi/issues/1701))
+
+### Removed
+
+- Removed the `re-roots past a cwd-less legacy session in a shared explicit sessionDir` relocation test case and the `stores symlink-equivalent home cwd sessions under home-relative directories` file-operations test case.
 
 ## [15.12.5] - 2026-06-13
 ### Changed

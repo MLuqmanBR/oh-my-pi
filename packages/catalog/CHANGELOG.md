@@ -1,6 +1,8 @@
 # Changelog
 ## [Unreleased]
 
+## [15.12.6] - 2026-06-14
+
 ### Added
 
 - Added GLM-5.2 to the bundled zai (GLM Coding Plan) catalog as the selectable 1M served model.
